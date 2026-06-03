@@ -1,0 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&family=Orbitron:wght@400;700;900&display=swap');
+
+:root {
+  --bg-void: #020408;
+  --bg-deep: #040d14;
+  --bg-panel: #071520;
+  --bg-card: #0a1f30;
+  --border-dim: rgba(0, 200, 180, 0.12);
+  --border-mid: rgba(0, 200, 180, 0.28);
+  --border-hot: rgba(0, 200, 180, 0.65);
+  --accent-cyan: #00c8b4;
+  --accent-cyan-dim: rgba(0, 200, 180, 0.15);
+  --accent-green: #39ff8a;
+  --accent-amber: #ffb020;
+  --accent-red: #ff3d5a;
+  --text-primary: #d4eae8;
+  --text-secondary: #6b9a96;
+  --text-dim: #2e5450;
+  --font-mono: 'Share Tech Mono', monospace;
+  --font-ui: 'Rajdhani', sans-serif;
+  --font-display: 'Orbitron', monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg-void);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(0, 200, 180, 0.07) 0%, transparent 60%),
+    repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(0, 200, 180, 0.025) 39px, rgba(0, 200, 180, 0.025) 40px),
+    repeating-linear-gradient(90deg, transparent, transparent 39px, rgba(0, 200, 180, 0.015) 39px, rgba(0, 200, 180, 0.015) 40px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+.scanline {
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(to bottom,
+      transparent 0px,
+      transparent 2px,
+      rgba(0, 0, 0, 0.08) 2px,
+      rgba(0, 0, 0, 0.08) 4px);
+  pointer-events: none;
+  z-index: 999;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-void);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-mid);
+  border-radius: 2px;
+}

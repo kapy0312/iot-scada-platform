@@ -1,0 +1,4 @@
+{
+  "python.defaultInterpreterPath": "C:\\ProgramData\\miniconda3\\envs\\iot-scada\\python.exe",
+  "python.terminal.activateEnvironment": true
+}
