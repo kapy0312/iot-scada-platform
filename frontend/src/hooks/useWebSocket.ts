@@ -2,12 +2,20 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 
+export interface AnomalyResult {
+  is_anomaly: boolean;
+  score: number;
+  status: string;
+  remaining?: number;
+}
+
 export interface PlcData {
-    timestamp: number;
-    motor_speed: number;
-    temperature: number;
-    pressure: number;
-    motor_enable: number;
+  timestamp: number;
+  motor_speed: number;
+  temperature: number;
+  pressure: number;
+  motor_enable: number;
+  anomaly: AnomalyResult;
 }
 
 export function useWebSocket(url: string) {

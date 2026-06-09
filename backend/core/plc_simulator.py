@@ -2,6 +2,10 @@ import asyncio
 import time
 from asyncua import Client
 from core.ws_manager import manager
+from db.writer import write_to_db
+from ml.inferencer import AnomalyDetector
+
+detector = AnomalyDetector("models/S7-1511T_anomaly_v1.pkl")
 
 PLC_URL = "opc.tcp://192.168.0.10:4840"
 NS = 3  # PLC_1 的 Namespace Index
@@ -41,9 +45,15 @@ async def poll_plc_forever():
                         "pressure":    round(float(prs), 3),
                         "motor_enable": 1,
                     }
-                    await manager.broadcast(data)
-                    await asyncio.sleep(1)
+                    # ML 推論
+                    anomaly = detector.update(data)
+                    data["anomaly"] = anomaly
 
+                    await manager.broadcast(data)
+                    asyncio.create_task(
+                        write_to_db("S7-1511T", data)
+                    )
+                    await asyncio.sleep(1)
         except Exception as e:
             print(f"[PLC] ❌ 連線失敗：{e}")
             print("[PLC] 5 秒後重試...")
