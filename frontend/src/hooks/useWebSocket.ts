@@ -7,6 +7,7 @@ export interface AnomalyResult {
   score: number;
   status: string;
   remaining?: number;
+  ai_analysis?: string;  // Ollama 分析結果（異常時才有）
 }
 
 export interface PlcData {

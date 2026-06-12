@@ -6,17 +6,17 @@ import time
 
 # 模擬的 D 暫存器初始值
 registers = {
-    100: 1480,   # D100 motor_speed（RPM，整數）
-    101: 700,    # D101 temperature × 10（700 = 70.0°C）
-    102: 50,     # D102 pressure × 10（50 = 5.0 bar）
+    100: 9999,   # motor_speed 異常高
+    101: 950,    # temperature 95°C 異常高
+    102: 900,    # pressure 90.0 bar 異常高（×10）
 }
 
 def simulate_fluctuation():
     """背景執行緒，讓資料自然波動"""
     while True:
-        registers[100] = int(1480 + random.gauss(0, 10))   # 轉速
-        registers[101] = int(700  + random.gauss(0, 5))    # 溫度
-        registers[102] = int(50   + random.gauss(0, 2))    # 壓力
+        registers[100] = max(0, min(65535, int(registers[100] + random.gauss(0, 10))))
+        registers[101] = max(0, min(65535, int(registers[101] + random.gauss(0, 5))))
+        registers[102] = max(0, min(65535, int(registers[102] + random.gauss(0, 2))))
         time.sleep(1)
 
 def parse_slmp_request(data: bytes):
