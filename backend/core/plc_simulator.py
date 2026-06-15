@@ -10,23 +10,25 @@ detector = AnomalyDetector(model_dir="models")
 _last_ollama_call = 0.0
 OLLAMA_COOLDOWN   = 60.0
 
-PLC_IP   = "127.0.0.1"
+PLC_IP   = "192.168.0.20"
 PLC_PORT = 5011
+plc_instance = None  # 全域共用連線
 
 async def poll_plc_forever():
     print("[PLC] 啟動 FX5U SLMP 連線...")
 
     while True:
         try:
-            plc = pymcprotocol.Type3E(plctype="iQ-L")
-            plc.connect(PLC_IP, PLC_PORT)
+            global plc_instance
+            plc_instance = pymcprotocol.Type3E(plctype="iQ-L")
+            plc_instance.connect(PLC_IP, PLC_PORT)
             print("[PLC] ✅ 連線成功，開始輪詢")
 
             while True:
                 # 用 asyncio 的執行緒池跑同步的 pymcprotocol
                 values = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    lambda: plc.batchread_wordunits(headdevice="D100", readsize=3)
+                    lambda: plc_instance.batchread_wordunits(headdevice="D100", readsize=3)
                 )
 
                 data = {
@@ -60,9 +62,10 @@ async def poll_plc_forever():
             print(f"[PLC] ❌ 連線失敗：{e}")
             print("[PLC] 5 秒後重試...")
             try:
-                plc.close()
+                plc_instance.close()
             except Exception:
                 pass
+            plc_instance = None
             await asyncio.sleep(5)
             
 # 在檔案頂層加這個變數，記住最新的 AI 分析結果

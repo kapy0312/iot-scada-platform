@@ -2,7 +2,7 @@ import pymcprotocol
 import time
 
 plc = pymcprotocol.Type3E(plctype="iQ-L")
-plc.connect("127.0.0.1", 5011)
+plc.connect("192.168.0.20", 5011)
 
 print("✅ 連線成功\n")
 
