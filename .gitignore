@@ -13,3 +13,7 @@ dist/
 # 系統
 .DS_Store
 Thumbs.db
+
+#TIA / GX Works3 專案檔
+DEMO/
+DEMO_FX5U.gx3
