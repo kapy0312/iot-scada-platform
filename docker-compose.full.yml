@@ -1,0 +1,32 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: timescaledb
+    environment:
+      POSTGRES_PASSWORD: iotscada123
+      POSTGRES_DB: iotscada
+    ports:
+      - "5435:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    container_name: iot-backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - timescaledb
+    environment:
+      DATABASE_URL: postgresql://postgres:iotscada123@timescaledb:5432/iotscada
+
+  frontend:
+    build: ./frontend
+    container_name: iot-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  timescale_data:
