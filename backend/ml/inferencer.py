@@ -19,8 +19,13 @@ class AnomalyDetector:
         os.makedirs(self.model_dir, exist_ok=True)
         models = sorted([
             f for f in os.listdir(self.model_dir)
-            if f.endswith(".pkl")
+            if f.endswith(".pkl") and "_anomaly_2" in f
         ])
+        if not models:
+            models = sorted([
+                f for f in os.listdir(self.model_dir)
+                if f.endswith(".pkl")
+            ])
         if models:
             latest = os.path.join(self.model_dir, models[-1])
             self.pipeline = joblib.load(latest)
@@ -29,6 +34,7 @@ class AnomalyDetector:
             print("[ML] 沒有模型，進入資料收集模式")
 
     def reload_model(self):
+        """訓練完後熱更新，不需要重啟"""
         self._load_latest_model()
 
     def update(self, data: dict) -> dict:
@@ -65,7 +71,7 @@ class AnomalyDetector:
 
         X = np.array(list(features.values())).reshape(1, -1)
         score      = float(self.pipeline.decision_function(X)[0])
-        is_anomaly = score < 0.15
+        is_anomaly = score < 0.05
 
         return {
             "is_anomaly": is_anomaly,

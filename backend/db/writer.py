@@ -1,7 +1,11 @@
 import asyncpg
 from datetime import datetime, timezone
+import os
 
-DATABASE_URL = "postgresql://postgres:iotscada123@localhost:5435/iotscada"
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:iotscada123@localhost:5435/iotscada"
+)
 
 async def write_to_db(device_id: str, data: dict):
     """

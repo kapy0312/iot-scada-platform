@@ -5,23 +5,26 @@ interface Props {
 }
 
 export default function AnomalyPanel({ anomaly }: Props) {
+  const isCollecting = anomaly?.status === "collecting_data";
   const isWarming = anomaly?.status === "warming_up";
   const isAnomaly = anomaly?.is_anomaly === true;
 
   const borderColor = isAnomaly
     ? "rgba(255,61,90,0.6)"
-    : isWarming
+    : isWarming || isCollecting
     ? "var(--border-dim)"
     : "rgba(57,255,138,0.35)";
 
   const statusColor = isAnomaly
     ? "var(--accent-red)"
-    : isWarming
+    : isWarming || isCollecting
     ? "var(--text-secondary)"
     : "var(--accent-green)";
 
   const statusText = isAnomaly
     ? "⚠ ANOMALY DETECTED"
+    : isCollecting
+    ? "● COLLECTING DATA"
     : isWarming
     ? `WARMING UP (${anomaly?.remaining ?? "?"} remaining)`
     : "✓ NORMAL";
@@ -203,6 +206,42 @@ export default function AnomalyPanel({ anomaly }: Props) {
               </div>
             </div>
           )}
+        </div>
+      )}
+      {/* AI 診斷說明 */}
+      {anomaly?.ai_analysis && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: "10px 12px",
+            background: "var(--bg-deep)",
+            border: "1px solid var(--border-dim)",
+            borderRadius: 2,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: "var(--font-ui)",
+              fontSize: 10,
+              letterSpacing: 2,
+              color: "var(--text-secondary)",
+              marginBottom: 6,
+              textTransform: "uppercase",
+            }}
+          >
+            AI 診斷說明
+          </div>
+          <div
+            style={{
+              fontFamily: "var(--font-ui)",
+              fontSize: 13,
+              color: "var(--text-primary)",
+              lineHeight: 1.8,
+              whiteSpace: "pre-line",
+            }}
+          >
+            {anomaly.ai_analysis}
+          </div>
         </div>
       )}
     </div>

@@ -45,7 +45,6 @@ async def write_to_plc(cmd: ControlCommand):
             None, _write_plc_sync, cmd.tag, cmd.value
         )
         return {"status": "ok", "tag": cmd.tag, "value": cmd.value}
-
     except Exception as e:
         print(f"[CONTROL] 寫入失敗：{e}")
         return {"status": "error", "message": str(e)}

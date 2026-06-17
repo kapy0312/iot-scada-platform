@@ -1,0 +1,16 @@
+services:
+  backend:
+    build: ./backend
+    container_name: iot-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:iotscada123@host.docker.internal:5435/iotscada
+
+  frontend:
+    build: ./frontend
+    container_name: iot-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend

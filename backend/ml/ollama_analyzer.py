@@ -1,9 +1,13 @@
+import os
 import httpx
 import asyncpg
 
 OLLAMA_URL   = "http://100.89.23.28:11434"
 OLLAMA_MODEL = "qwen3:14b"
-DATABASE_URL = "postgresql://postgres:iotscada123@localhost:5435/iotscada"
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:iotscada123@localhost:5435/iotscada"
+)
 
 SYSTEM_PROMPT = """你只能輸出剛好兩行繁體中文，格式如下：
 原因：（一句話，40字以內）
@@ -32,7 +36,6 @@ async def get_recent_trend(device_id: str) -> dict:
         return {}
 
 async def analyze_anomaly(anomaly_data: dict, device_id: str = "FX5U-MOCK") -> str:
-    # 查詢 5 分鐘趨勢
     trend = await get_recent_trend(device_id)
 
     def fmt(tag: str, unit: str) -> str:
