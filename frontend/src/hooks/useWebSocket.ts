@@ -7,6 +7,7 @@ export interface AnomalyResult {
   score: number;
   status: string;
   remaining?: number;
+  ai_analysis?: string;
 }
 
 export interface PlcData {

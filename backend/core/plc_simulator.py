@@ -5,8 +5,12 @@ from core.ws_manager import manager
 from db.writer import write_to_db
 from db.anomaly_writer import write_anomaly_event
 from ml.inferencer import AnomalyDetector
+from ml.ollama_analyzer import analyze_anomaly
 
-detector = AnomalyDetector("models/S7-1511T_anomaly_v1.pkl")
+detector = AnomalyDetector(model_dir="models")
+_last_ollama_call = 0.0
+OLLAMA_COOLDOWN   = 60.0
+_latest_ai_analysis: str = ""
 
 PLC_URL = "opc.tcp://192.168.0.10:4840"
 NS = 3  # PLC_1 的 Namespace Index
@@ -48,6 +52,20 @@ async def poll_plc_forever():
                     }
                     # ML 推論
                     anomaly = detector.update(data)
+
+                    # 異常時觸發 Ollama（60秒冷卻）
+                    global _last_ollama_call, _latest_ai_analysis
+                    now = time.time()
+                    if (anomaly.get("is_anomaly") and
+                        anomaly.get("status") == "anomaly" and
+                        now - _last_ollama_call > OLLAMA_COOLDOWN):
+                        _last_ollama_call = now
+                        asyncio.create_task(_fetch_ollama_analysis(data, anomaly))
+
+                    # 持續帶入最新 AI 分析
+                    if anomaly.get("is_anomaly") and _latest_ai_analysis:
+                        anomaly["ai_analysis"] = _latest_ai_analysis
+
                     data["anomaly"] = anomaly
 
                     await manager.broadcast(data)
@@ -64,3 +82,16 @@ async def poll_plc_forever():
             print(f"[PLC] ❌ 連線失敗：{e}")
             print("[PLC] 5 秒後重試...")
             await asyncio.sleep(5)
+            
+async def _fetch_ollama_analysis(data: dict, anomaly: dict):
+    global _latest_ai_analysis
+    analysis = await analyze_anomaly({
+        "motor_speed":   data.get("motor_speed"),
+        "temperature":   data.get("temperature"),
+        "pressure":      data.get("pressure"),
+        "anomaly_score": anomaly.get("score", 0),
+    }, device_id="S7-1511T")
+    _latest_ai_analysis = analysis
+    anomaly["ai_analysis"] = analysis
+    await manager.broadcast(data)
+    print(f"[Ollama] 分析完成：\n{analysis}")

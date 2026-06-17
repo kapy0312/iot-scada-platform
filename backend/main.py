@@ -5,13 +5,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers.realtime import router as ws_router
 from routers.control import router as ctrl_router
 from routers.history import router as history_router
-from core.plc_simulator import poll_plc_forever
+from core.plc_simulator import poll_plc_forever, detector
+from ml.auto_trainer import auto_retrain_loop
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(poll_plc_forever())
+    task1 = asyncio.create_task(poll_plc_forever())
+    task2 = asyncio.create_task(auto_retrain_loop(detector))
     yield
-    task.cancel()
+    task1.cancel()
+    task2.cancel()
 
 app = FastAPI(lifespan=lifespan)
 
