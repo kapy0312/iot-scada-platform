@@ -208,42 +208,6 @@ export default function AnomalyPanel({ anomaly }: Props) {
           )}
         </div>
       )}
-      {/* AI 診斷說明 */}
-      {anomaly?.ai_analysis && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: "10px 12px",
-            background: "var(--bg-deep)",
-            border: "1px solid var(--border-dim)",
-            borderRadius: 2,
-          }}
-        >
-          <div
-            style={{
-              fontFamily: "var(--font-ui)",
-              fontSize: 10,
-              letterSpacing: 2,
-              color: "var(--text-secondary)",
-              marginBottom: 6,
-              textTransform: "uppercase",
-            }}
-          >
-            AI 診斷說明
-          </div>
-          <div
-            style={{
-              fontFamily: "var(--font-ui)",
-              fontSize: 13,
-              color: "var(--text-primary)",
-              lineHeight: 1.8,
-              whiteSpace: "pre-line",
-            }}
-          >
-            {anomaly.ai_analysis}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -18,7 +18,7 @@ export default function AnomalyHistory() {
     setLoading(true);
     try {
       const res = await fetch(
-        `http://localhost:8000/api/anomaly-events?device_id=S7-1511T&hours=${hours}`
+        `http://localhost:8000/api/anomaly-events?device_id=FX5U-MOCK&hours=${hours}`
       );
       const data = await res.json();
       setEvents(data.events);

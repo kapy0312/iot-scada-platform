@@ -249,11 +249,11 @@ export default function App() {
               </div>
             )}
           </div>
+        </div>
 
-          {/* 異常歷史（全寬） */}
-          <div style={{ marginTop: 12 }}>
-            <AnomalyHistory />
-          </div>
+        {/* 異常歷史（全寬） */}
+        <div style={{ marginTop: 12 }}>
+          <AnomalyHistory />
         </div>
       </div>
 
