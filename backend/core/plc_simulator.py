@@ -3,6 +3,7 @@ import time
 from asyncua import Client
 from core.ws_manager import manager
 from db.writer import write_to_db
+from db.anomaly_writer import write_anomaly_event
 from ml.inferencer import AnomalyDetector
 
 detector = AnomalyDetector("models/S7-1511T_anomaly_v1.pkl")
@@ -50,9 +51,14 @@ async def poll_plc_forever():
                     data["anomaly"] = anomaly
 
                     await manager.broadcast(data)
-                    asyncio.create_task(
-                        write_to_db("S7-1511T", data)
-                    )
+                    asyncio.create_task(write_to_db("S7-1511T", data))
+
+                    # 異常時寫入 anomaly_events
+                    if anomaly.get("is_anomaly"):
+                        asyncio.create_task(
+                            write_anomaly_event("S7-1511T", data, anomaly)
+                        )
+
                     await asyncio.sleep(1)
         except Exception as e:
             print(f"[PLC] ❌ 連線失敗：{e}")

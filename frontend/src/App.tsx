@@ -3,8 +3,9 @@
 import { useWebSocket } from "./hooks/useWebSocket";
 import GaugeCard from "./components/GaugeCard";
 import RealtimeChart from "./components/RealtimeChart";
-import ControlPanel from './components/ControlPanel';
-import AnomalyPanel from './components/AnomalyPanel';
+import ControlPanel from "./components/ControlPanel";
+import AnomalyPanel from "./components/AnomalyPanel";
+import AnomalyHistory from "./components/AnomalyHistory";
 
 export default function App() {
   const { data, history, isConnected, sendCommand } = useWebSocket(
@@ -158,7 +159,11 @@ export default function App() {
 
         {/* Control + Status row */}
         <div
-          style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr 1fr",
+            gap: 12,
+          }}
         >
           <ControlPanel
             onCommand={sendCommand}
@@ -243,6 +248,11 @@ export default function App() {
                 Awaiting connection...
               </div>
             )}
+          </div>
+
+          {/* 異常歷史（全寬） */}
+          <div style={{ marginTop: 12 }}>
+            <AnomalyHistory />
           </div>
         </div>
       </div>
