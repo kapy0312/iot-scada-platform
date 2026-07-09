@@ -10,6 +10,14 @@ services:
     volumes:
       - timescale_data:/var/lib/postgresql/data
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
   backend:
     build: ./backend
     container_name: iot-backend
@@ -17,8 +25,10 @@ services:
       - "8000:8000"
     depends_on:
       - timescaledb
+      - qdrant
     environment:
       DATABASE_URL: postgresql://postgres:iotscada123@timescaledb:5432/iotscada
+      QDRANT_URL: http://qdrant:6333
 
   frontend:
     build: ./frontend
@@ -30,3 +40,4 @@ services:
 
 volumes:
   timescale_data:
+  qdrant_data:

@@ -6,6 +6,8 @@ import RealtimeChart from "./components/RealtimeChart";
 import ControlPanel from "./components/ControlPanel";
 import AnomalyPanel from "./components/AnomalyPanel";
 import AnomalyHistory from "./components/AnomalyHistory";
+import RagPanel from "./components/RagPanel";
+import DataSourceToggle from "./components/DataSourceToggle";
 
 export default function App() {
   const { data, history, isConnected, sendCommand } = useWebSocket(
@@ -192,6 +194,9 @@ export default function App() {
             >
               System Status
             </div>
+            <div style={{ marginBottom: 16 }}>
+              <DataSourceToggle />
+            </div>
             {data ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {[
@@ -252,7 +257,15 @@ export default function App() {
 
           {/* 異常歷史（全寬） */}
           <div style={{ marginTop: 12 }}>
-            <AnomalyHistory />
+            <AnomalyHistory
+              isAnomaly={data?.anomaly?.is_anomaly ?? false}
+              dataSource={data?.source}
+            />
+          </div>
+
+          {/* RAG 知識庫管理 */}
+          <div style={{ marginTop: 12 }}>
+            <RagPanel />
           </div>
         </div>
       </div>

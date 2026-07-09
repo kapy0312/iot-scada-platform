@@ -17,6 +17,7 @@ export interface PlcData {
   pressure: number;
   motor_enable: number;
   anomaly: AnomalyResult;
+  source?: string;
 }
 
 export function useWebSocket(url: string) {

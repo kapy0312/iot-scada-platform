@@ -89,7 +89,7 @@ async def should_retrain() -> tuple[bool, str]:
 
     models = sorted([
         f for f in os.listdir(MODEL_DIR)
-        if f.endswith(".pkl")
+        if f.endswith(".pkl") and "_anomaly_2" in f
     ]) if os.path.exists(MODEL_DIR) else []
 
     if not models:

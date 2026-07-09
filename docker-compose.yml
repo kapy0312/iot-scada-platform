@@ -1,11 +1,23 @@
 services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
   backend:
     build: ./backend
     container_name: iot-backend
     ports:
       - "8000:8000"
+    depends_on:
+      - qdrant
     environment:
       DATABASE_URL: postgresql://postgres:iotscada123@host.docker.internal:5435/iotscada
+      QDRANT_URL: http://qdrant:6333
+      PLC_SOURCE: mock
 
   frontend:
     build: ./frontend
@@ -14,3 +26,6 @@ services:
       - "3000:80"
     depends_on:
       - backend
+
+  volumes:
+  qdrant_data:

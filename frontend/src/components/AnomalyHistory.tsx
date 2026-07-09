@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface AnomalyEvent {
   time: string;
@@ -9,16 +9,22 @@ interface AnomalyEvent {
   ai_analysis: string | null;
 }
 
-export default function AnomalyHistory() {
+interface Props {
+  isAnomaly: boolean;
+  dataSource?: string;
+}
+
+export default function AnomalyHistory({ isAnomaly, dataSource }: Props) {
   const [events, setEvents] = useState<AnomalyEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [hours, setHours] = useState(24);
 
   const fetchEvents = async () => {
     setLoading(true);
+    const deviceId = dataSource === "mock" ? "S7-1511T-MOCK" : "S7-1511T";
     try {
       const res = await fetch(
-        `http://localhost:8000/api/anomaly-events?device_id=S7-1511T&hours=${hours}`
+        `http://localhost:8000/api/anomaly-events?device_id=${deviceId}&hours=${hours}`
       );
       const data = await res.json();
       setEvents(data.events);
@@ -31,7 +37,19 @@ export default function AnomalyHistory() {
 
   useEffect(() => {
     fetchEvents();
-  }, [hours]);
+  }, [hours, dataSource]);
+
+  // 監聽 is_anomaly 從 false 變 true 的瞬間，延遲觸發刷新讓後端 DB 寫入完成
+  const wasAnomaly = useRef(false);
+  useEffect(() => {
+    if (isAnomaly && !wasAnomaly.current) {
+      const timer = setTimeout(() => {
+        fetchEvents();
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+    wasAnomaly.current = isAnomaly;
+  }, [isAnomaly]);
 
   const formatTime = (iso: string) => {
     const d = new Date(iso);

@@ -15,10 +15,11 @@ async def write_to_db(device_id: str, data: dict):
     conn = await asyncpg.connect(DATABASE_URL)
     try:
         now = datetime.now(timezone.utc)
+        NUMERIC_TAGS = ("motor_speed", "temperature", "pressure")
         rows = [
             (now, device_id, tag, float(value), 192)
             for tag, value in data.items()
-            if tag not in ("timestamp", "motor_enable", "anomaly")
+            if tag in NUMERIC_TAGS
         ]
         await conn.executemany(
             """
