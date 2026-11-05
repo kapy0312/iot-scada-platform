@@ -1,0 +1,78 @@
+import { useEffect, useState } from "react";
+import { getDataSource, setDataSource, type Source } from "../api";
+import { WS_URL } from "../config";
+
+interface Props {
+  historyCount: number;
+  threshold: number;
+  profileFromServer: boolean;
+  lastUpdate?: number;
+}
+
+export default function SystemSettings({ historyCount, threshold, profileFromServer, lastUpdate }: Props) {
+  const [current, setCurrent] = useState<Source | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getDataSource().then(setCurrent).catch(() => setError("無法取得目前資料源"));
+  }, []);
+
+  const switchTo = async (source: Source) => {
+    if (source === current || switching) return;
+    const warn = source === "opcua" ? "切換到 OPC UA 會連線實體 PLC（或 PLCSIM），確定嗎？" : "切換到模擬資料源，確定嗎？";
+    if (!window.confirm(warn)) return;
+    setSwitching(true);
+    setError(null);
+    try {
+      setCurrent(await setDataSource(source));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "切換失敗");
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  const rows: Array<[string, string]> = [
+    ["WebSocket", WS_URL],
+    ["最後更新", lastUpdate ? new Date(lastUpdate * 1000).toLocaleString("zh-TW", { hour12: false }) : "—"],
+    ["趨勢緩衝", `${historyCount} / 600 筆（10 分鐘）`],
+    ["異常模型", "Isolation Forest（30 筆視窗 · 15 特徵）"],
+    ["異常門檻", `分數低於 ${threshold}`],
+    ["設備規格來源", profileFromServer ? "後端 /api/device-profile" : "前端預設值（後端未回應）"],
+  ];
+
+  return (
+    <div className="columns">
+      <section className="panel col-side" aria-labelledby="src-h">
+        <div className="panel-head">
+          <h2 id="src-h" className="panel-title">資料源</h2>
+        </div>
+        <div className="seg" role="group" aria-label="資料源">
+          <button type="button" className="btn" aria-pressed={current === "mock"} disabled={switching} onClick={() => switchTo("mock")}>
+            MOCK 模擬
+          </button>
+          <button type="button" className="btn" aria-pressed={current === "opcua"} disabled={switching} onClick={() => switchTo("opcua")}>
+            OPC UA
+          </button>
+        </div>
+        <p className="small muted">
+          模擬資料以 S7-1511T-MOCK 存放，不會進入模型訓練。觸發模擬異常的按鈕在「監控」分頁的控制面板。
+        </p>
+        {error && <p className="error">{error}</p>}
+      </section>
+
+      <section className="panel col-wide" aria-labelledby="sys-h">
+        <div className="panel-head">
+          <h2 id="sys-h" className="panel-title">系統資訊</h2>
+        </div>
+        {rows.map(([k, v]) => (
+          <div className="kv" key={k}>
+            <span className="muted">{k}</span>
+            <span className="mono">{v}</span>
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}

@@ -7,6 +7,7 @@ from routers.control import router as ctrl_router
 from routers.history import router as history_router
 from routers.rag import router as rag_router
 from routers.system import router as system_router
+from routers.device import router as device_router
 from core.plc_simulator import start_polling, stop_polling, detector
 from ml.auto_trainer import auto_retrain_loop
 
@@ -32,6 +33,7 @@ app.include_router(ctrl_router)
 app.include_router(history_router)
 app.include_router(rag_router)
 app.include_router(system_router)
+app.include_router(device_router)
 
 @app.get("/health")
 async def health():

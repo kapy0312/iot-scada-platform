@@ -5,7 +5,7 @@ from qdrant_client.models import (
     Filter, FieldCondition, MatchValue,
 )
 
-QDRANT_URL      = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL      = os.getenv("QDRANT_URL", "http://localhost:6343")
 COLLECTION_NAME = "device_manuals"
 VECTOR_SIZE     = 1024  # bge-m3 輸出維度
 

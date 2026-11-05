@@ -14,7 +14,7 @@ services:
     image: qdrant/qdrant:latest
     container_name: qdrant
     ports:
-      - "6333:6333"
+      - "6343:6333"
     volumes:
       - qdrant_data:/qdrant/storage
 

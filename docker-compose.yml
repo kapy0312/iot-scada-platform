@@ -7,7 +7,8 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql://postgres:iotscada123@host.docker.internal:5435/iotscada
-      QDRANT_URL: http://host.docker.internal:6333
+      QDRANT_URL: http://host.docker.internal:6343
+      OLLAMA_URL: http://100.89.23.28:11434
       PLC_SOURCE: mock
 
   frontend:

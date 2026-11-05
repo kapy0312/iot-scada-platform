@@ -1,281 +1,104 @@
-// App.tsx
-
+// App.tsx — ISA-101 風格的單元監控畫面
+import { useEffect, useState } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
-import GaugeCard from "./components/GaugeCard";
-import RealtimeChart from "./components/RealtimeChart";
+import { useTheme } from "./hooks/useTheme";
+import { useAlarms } from "./hooks/useAlarms";
+import { useDeviceProfile } from "./deviceProfile";
+import { WS_URL } from "./config";
+import StatusBar from "./components/StatusBar";
+import ProcessOverview from "./components/ProcessOverview";
+import TrendPanel from "./components/TrendPanel";
+import AlarmPanel, { describeStatus, type Diagnosis } from "./components/AlarmPanel";
 import ControlPanel from "./components/ControlPanel";
-import AnomalyPanel from "./components/AnomalyPanel";
-import AnomalyHistory from "./components/AnomalyHistory";
+import EventLog from "./components/EventLog";
 import RagPanel from "./components/RagPanel";
-import DataSourceToggle from "./components/DataSourceToggle";
+import SystemSettings from "./components/SystemSettings";
+
+type Tab = "monitor" | "manuals" | "settings";
+const TABS: Array<{ id: Tab; label: string }> = [
+  { id: "monitor", label: "監控" },
+  { id: "manuals", label: "手冊管理" },
+  { id: "settings", label: "系統設定" },
+];
 
 export default function App() {
-  const { data, history, isConnected, sendCommand } = useWebSocket(
-    "ws://localhost:8000/ws/realtime"
-  );
+  const { data, history, isConnected, sendCommand } = useWebSocket(WS_URL);
+  const { theme, toggle } = useTheme();
+  const [tab, setTab] = useState<Tab>("monitor");
+
+  const deviceId = data?.device_id ?? (data?.source === "mock" ? "S7-1511T-MOCK" : "S7-1511T");
+  const { profile, threshold, fromServer } = useDeviceProfile(deviceId);
+  const alarms = useAlarms(data, profile, threshold);
+
+  // 保留最近一次 AI 診斷，異常結束後畫面仍看得到
+  const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
+  const aiText = data?.anomaly?.ai_analysis;
+  useEffect(() => {
+    if (!data || !aiText) return;
+    setDiagnosis((prev) =>
+      prev?.text === aiText ? prev : { text: aiText, at: data.timestamp, status: describeStatus(profile, data) }
+    );
+  }, [aiText, data, profile]);
 
   return (
     <>
-      <div className="scanline" />
-      <div style={{ minHeight: "100vh", padding: "24px 32px" }}>
-        {/* Header */}
-        <header
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 32,
-            paddingBottom: 16,
-            borderBottom: "1px solid var(--border-dim)",
-          }}
-        >
-          <div>
-            <div
-              style={{
-                fontFamily: "var(--font-display)",
-                fontSize: 11,
-                letterSpacing: 6,
-                color: "var(--text-secondary)",
-                marginBottom: 6,
-              }}
-            >
-              INDUSTRIAL MONITOR
-            </div>
-            <h1
-              style={{
-                fontFamily: "var(--font-display)",
-                fontSize: 22,
-                fontWeight: 700,
-                color: "var(--accent-cyan)",
-                letterSpacing: 2,
-              }}
-            >
-              IIoT SCADA PLATFORM
-            </h1>
-          </div>
+      <StatusBar
+        deviceName={profile.name}
+        source={data?.source}
+        isConnected={isConnected}
+        lastUpdate={data?.timestamp}
+        alarms={alarms}
+        theme={theme}
+        onToggleTheme={toggle}
+      />
 
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background: isConnected
-                  ? "var(--accent-green)"
-                  : "var(--accent-red)",
-                boxShadow: isConnected
-                  ? "0 0 12px var(--accent-green)"
-                  : "0 0 12px var(--accent-red)",
-                animation: isConnected ? "pulse 2s infinite" : "none",
-              }}
-            />
-            <span
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 12,
-                color: isConnected
-                  ? "var(--accent-green)"
-                  : "var(--accent-red)",
-              }}
-            >
-              {isConnected ? "CONNECTED" : "DISCONNECTED"}
-            </span>
-          </div>
-        </header>
-
-        {/* Gauge row */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: 12,
-            marginBottom: 12,
-          }}
-        >
-          <GaugeCard
-            label="Motor Speed"
-            value={data?.motor_speed ?? 0}
-            unit="RPM"
-            min={0}
-            max={1800}
-            warn={1600}
-            danger={1750}
-            decimals={1}
-          />
-          <GaugeCard
-            label="Temperature"
-            value={data?.temperature ?? 0}
-            unit="°C"
-            min={0}
-            max={120}
-            warn={80}
-            danger={100}
-            decimals={2}
-          />
-          <GaugeCard
-            label="Pressure"
-            value={data?.pressure ?? 0}
-            unit="bar"
-            min={0}
-            max={10}
-            warn={7}
-            danger={9}
-            decimals={3}
-          />
-        </div>
-
-        {/* Charts */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: 12,
-            marginBottom: 12,
-          }}
-        >
-          <RealtimeChart
-            data={history}
-            dataKey="motor_speed"
-            color="var(--accent-cyan)"
-            label="Speed Trend"
-            unit="RPM"
-            warnValue={1600}
-          />
-          <RealtimeChart
-            data={history}
-            dataKey="temperature"
-            color="var(--accent-amber)"
-            label="Temp Trend"
-            unit="°C"
-            warnValue={80}
-          />
-          <RealtimeChart
-            data={history}
-            dataKey="pressure"
-            color="var(--accent-green)"
-            label="Pressure Trend"
-            unit="bar"
-            warnValue={7}
-          />
-        </div>
-
-        {/* Control + Status row */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr 1fr",
-            gap: 12,
-          }}
-        >
-          <ControlPanel
-            onCommand={sendCommand}
-            motorEnabled={!!data?.motor_enable}
-          />
-          <AnomalyPanel anomaly={data?.anomaly ?? null} />
-
-          {/* System log */}
-          <div
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border-dim)",
-              borderRadius: 2,
-              padding: "20px 24px",
-            }}
+      <nav className="tabs" role="tablist" aria-label="畫面分頁">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            className="tab"
+            aria-selected={tab === t.id}
+            onClick={() => setTab(t.id)}
           >
-            <div
-              style={{
-                fontFamily: "var(--font-ui)",
-                fontSize: 11,
-                letterSpacing: 3,
-                color: "var(--text-secondary)",
-                textTransform: "uppercase",
-                marginBottom: 16,
-              }}
-            >
-              System Status
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <DataSourceToggle />
-            </div>
-            {data ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {[
-                  {
-                    k: "Last Update",
-                    v: new Date(data.timestamp * 1000).toLocaleTimeString(),
-                  },
-                  {
-                    k: "Motor Enable",
-                    v: data.motor_enable ? "RUNNING" : "STOPPED",
-                  },
-                  { k: "Data Points", v: `${history.length} / 120` },
-                  { k: "WS Endpoint", v: "ws://localhost:8000" },
-                ].map(({ k, v }) => (
-                  <div
-                    key={k}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      borderBottom: "1px solid var(--border-dim)",
-                      paddingBottom: 6,
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontFamily: "var(--font-ui)",
-                        fontSize: 12,
-                        color: "var(--text-secondary)",
-                        letterSpacing: 1,
-                      }}
-                    >
-                      {k}
-                    </span>
-                    <span
-                      style={{
-                        fontFamily: "var(--font-mono)",
-                        fontSize: 12,
-                        color: "var(--accent-cyan)",
-                      }}
-                    >
-                      {v}
-                    </span>
-                  </div>
-                ))}
+            {t.label}
+          </button>
+        ))}
+      </nav>
+
+      <main className="main">
+        {tab === "monitor" && (
+          <>
+            <div className="columns">
+              <div className="col-wide">
+                <ProcessOverview data={data} profile={profile} />
+                <TrendPanel history={history} profile={profile} />
               </div>
-            ) : (
-              <div
-                style={{
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 12,
-                  color: "var(--text-dim)",
-                }}
-              >
-                Awaiting connection...
+              <div className="col-side">
+                <AlarmPanel data={data} alarms={alarms} threshold={threshold} diagnosis={diagnosis} />
+                <ControlPanel
+                  onCommand={sendCommand}
+                  motorEnabled={data ? Boolean(data.motor_enable) : null}
+                  source={data?.source}
+                />
               </div>
-            )}
-          </div>
+            </div>
+            <EventLog deviceId={deviceId} isAnomaly={data?.anomaly?.is_anomaly ?? false} profile={profile} />
+          </>
+        )}
 
-          {/* 異常歷史（全寬） */}
-          <div style={{ marginTop: 12 }}>
-            <AnomalyHistory
-              isAnomaly={data?.anomaly?.is_anomaly ?? false}
-              dataSource={data?.source}
-            />
-          </div>
+        {tab === "manuals" && <RagPanel />}
 
-          {/* RAG 知識庫管理 */}
-          <div style={{ marginTop: 12 }}>
-            <RagPanel />
-          </div>
-        </div>
-      </div>
-
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.4; }
-        }
-      `}</style>
+        {tab === "settings" && (
+          <SystemSettings
+            historyCount={history.length}
+            threshold={threshold}
+            profileFromServer={fromServer}
+            lastUpdate={data?.timestamp}
+          />
+        )}
+      </main>
     </>
   );
 }

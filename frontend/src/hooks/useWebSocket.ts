@@ -1,6 +1,6 @@
 // useWebSocket.ts
-
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from "react";
+import { writeTag } from "../api";
 
 export interface AnomalyResult {
   is_anomaly: boolean;
@@ -18,44 +18,50 @@ export interface PlcData {
   motor_enable: number;
   anomaly: AnomalyResult;
   source?: string;
+  device_id?: string;
 }
 
+// 每秒一筆，保留 10 分鐘給趨勢圖
+const HISTORY_MAX = 600;
+
 export function useWebSocket(url: string) {
-    const [data, setData] = useState<PlcData | null>(null);
-    const [history, setHistory] = useState<PlcData[]>([]);
-    const [isConnected, setIsConnected] = useState(false);
-    const ws = useRef<WebSocket | null>(null);
-    const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [data, setData] = useState<PlcData | null>(null);
+  const [history, setHistory] = useState<PlcData[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
+  const ws = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const closedByUs = useRef(false);
 
-    const connect = useCallback(() => {
-        ws.current = new WebSocket(url);
-        ws.current.onopen = () => setIsConnected(true);
-        ws.current.onclose = () => {
-            setIsConnected(false);
-            reconnectTimer.current = setTimeout(connect, 3000);
-        };
-        ws.current.onmessage = (e) => {
-            const parsed: PlcData = JSON.parse(e.data);
-            setData(parsed);
-            setHistory(prev => [...prev.slice(-120), parsed]);
-        };
-    }, [url]);
+  const connect = useCallback(() => {
+    ws.current = new WebSocket(url);
+    ws.current.onopen = () => setIsConnected(true);
+    ws.current.onclose = () => {
+      setIsConnected(false);
+      if (!closedByUs.current) reconnectTimer.current = setTimeout(connect, 3000);
+    };
+    ws.current.onmessage = (e) => {
+      const parsed: PlcData = JSON.parse(e.data);
+      setData(parsed);
+      setHistory((prev) => {
+        // 同一秒可能收到兩次（AI 診斷完成時後端會再廣播一次），用新的取代舊的
+        const last = prev[prev.length - 1];
+        const base = last && last.timestamp === parsed.timestamp ? prev.slice(0, -1) : prev;
+        return [...base.slice(-(HISTORY_MAX - 1)), parsed];
+      });
+    };
+  }, [url]);
 
-    useEffect(() => {
-        connect();
-        return () => {
-            clearTimeout(reconnectTimer.current);
-            ws.current?.close();
-        };
-    }, [connect]);
+  useEffect(() => {
+    closedByUs.current = false;
+    connect();
+    return () => {
+      closedByUs.current = true;
+      clearTimeout(reconnectTimer.current);
+      ws.current?.close();
+    };
+  }, [connect]);
 
-    const sendCommand = useCallback((tag: string, value: number) => {
-        fetch('http://localhost:8000/api/control/write', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tag, value }),
-        });
-    }, []);
+  const sendCommand = useCallback((tag: string, value: number) => writeTag(tag, value), []);
 
-    return { data, history, isConnected, sendCommand };
+  return { data, history, isConnected, sendCommand };
 }
