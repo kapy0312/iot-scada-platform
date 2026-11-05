@@ -17,6 +17,8 @@ Thumbs.db
 # TIA / GX Works3 專案檔
 DEMO/
 DEMO_FX5U.gx3
+
+# 本機產生的資料（模型可重新訓練、手冊 PDF 另外保存）
 backend/models/
 document/
 

@@ -1,7 +1,7 @@
 // 依設備規格判斷目前的告警，並記住每個告警從何時開始
 import { useMemo, useRef } from "react";
 import type { PlcData } from "./useWebSocket";
-import { TAG_KEYS, TAG_META, evaluate, type DeviceProfile, type TagKey } from "../deviceProfile";
+import { evaluate, getValue, tagKeys, type DeviceProfile } from "../deviceProfile";
 
 export type AlarmLevel = "danger" | "warning";
 
@@ -20,10 +20,10 @@ export function useAlarms(data: PlcData | null, profile: DeviceProfile, threshol
     const now = data.timestamp;
     const active: Alarm[] = [];
 
-    for (const key of TAG_KEYS) {
-      const spec = profile.tags[key as TagKey];
-      const meta = TAG_META[key];
-      const value = data[key];
+    for (const key of tagKeys(profile)) {
+      const spec = profile.tags[key];
+      const value = getValue(data, key);
+      if (value === null) continue;
       const level = evaluate(spec, value);
       if (level !== "danger" && level !== "warning") continue;
       const id = `${key}:${level}`;
@@ -32,7 +32,7 @@ export function useAlarms(data: PlcData | null, profile: DeviceProfile, threshol
         key: id,
         level,
         since: 0,
-        text: `${spec.label} ${meta.tagNo} ${value.toFixed(meta.decimals)} ${spec.unit}，${level === "danger" ? "危險" : "警戒"} ${limit}`,
+        text: `${spec.label} ${spec.tag_no} ${value.toFixed(spec.decimals)} ${spec.unit}，${level === "danger" ? "危險" : "警戒"} ${limit}`,
       });
     }
 
@@ -41,7 +41,7 @@ export function useAlarms(data: PlcData | null, profile: DeviceProfile, threshol
         key: "ml:warning",
         level: "warning",
         since: 0,
-        text: `ML 異常分數 ${data.anomaly.score.toFixed(4)}（低於 ${threshold} 判定異常）`,
+        text: `ML 異常分數 ${data.anomaly.score.toFixed(4)}（連續低於門檻 ${data.anomaly.threshold ?? threshold}）`,
       });
     }
 

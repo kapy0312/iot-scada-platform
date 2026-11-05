@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { extractManualRefs, getAnomalyEvents, type AnomalyEvent } from "../api";
-import { TAG_KEYS, evaluate, type DeviceProfile, type Level } from "../deviceProfile";
+import { eventReadings, extractManualRefs, getAnomalyEvents, type AnomalyEvent } from "../api";
+import { evaluate, tagKeys, type DeviceProfile, type Level } from "../deviceProfile";
 
 interface Props {
   deviceId: string;
@@ -35,8 +35,9 @@ function groupIncidents(events: AnomalyEvent[], profile: DeviceProfile): Inciden
     .map((g) => {
       const peak: Record<string, number | null> = {};
       let level: Level = "normal";
-      for (const k of TAG_KEYS) {
-        const vals = g.map((e) => e[k]).filter((v): v is number => typeof v === "number");
+      const readings = g.map(eventReadings);
+      for (const k of tagKeys(profile)) {
+        const vals = readings.map((r) => r[k]).filter((v): v is number => typeof v === "number");
         peak[k] = vals.length ? Math.max(...vals) : null;
         if (peak[k] !== null) {
           const lv = evaluate(profile.tags[k], peak[k] as number);
@@ -118,7 +119,7 @@ export default function EventLog({ deviceId, isAnomaly, profile }: Props) {
                 <th>開始時間</th>
                 <th>持續</th>
                 <th>嚴重度</th>
-                <th>峰值（轉速／溫度／壓力）</th>
+                <th>峰值（{tagKeys(profile).map((k) => profile.tags[k].label).join("／")}）</th>
                 <th>AI 診斷</th>
                 <th>引用</th>
               </tr>
@@ -135,12 +136,15 @@ export default function EventLog({ deviceId, isAnomaly, profile }: Props) {
                       {LEVEL_LABEL[inc.level]}
                     </td>
                     <td className="mono nowrap">
-                      {[inc.peak.motor_speed?.toFixed(0), inc.peak.temperature?.toFixed(1), inc.peak.pressure?.toFixed(2)]
-                        .map((v) => v ?? "—")
+                      {tagKeys(profile)
+                        .map((k) => {
+                          const v = inc.peak[k];
+                          return typeof v === "number" ? v.toFixed(profile.tags[k].decimals) : "—";
+                        })
                         .join(" / ")}
                     </td>
                     <td style={{ whiteSpace: "pre-line" }}>{inc.analysis ?? <span className="muted">（無診斷）</span>}</td>
-                    <td className="nowrap">{refs.length ? refs.map((r) => `手冊 ${r}`).join("、") : "—"}</td>
+                    <td className="nowrap">{refs.length ? refs.join("、") : "—"}</td>
                   </tr>
                 );
               })}

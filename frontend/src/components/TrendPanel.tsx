@@ -3,7 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceArea, ReferenceLine,
 } from "recharts";
 import type { PlcData } from "../hooks/useWebSocket";
-import { TAG_KEYS, TAG_META, type DeviceProfile } from "../deviceProfile";
+import { getValue, tagKeys, type DeviceProfile } from "../deviceProfile";
 
 interface Props {
   history: PlcData[];
@@ -74,18 +74,18 @@ export default function TrendPanel({ history, profile }: Props) {
         <p className="muted" style={{ margin: 0 }}>等待資料中（連線後每秒累積一筆）</p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {TAG_KEYS.map((tag, i) => {
+          {tagKeys(profile).map((tag, i, keys) => {
             const spec = profile.tags[tag];
-            const meta = TAG_META[tag];
-            const isLast = i === TAG_KEYS.length - 1;
+            const [scaleMin, scaleMax] = spec.scale;
+            const isLast = i === keys.length - 1;
             return (
               <div className="trend-row" key={tag}>
                 <div className="trend-label">
                   <span style={{ fontSize: 13 }}>{spec.label}（{spec.unit}）</span>
-                  <span className="mono small muted">{meta.scaleMin}–{meta.scaleMax}</span>
+                  <span className="mono small muted">{scaleMin}–{scaleMax}</span>
                 </div>
                 <div className="trend-chart" role="img" aria-label={`${spec.label}最近 ${minutes} 分鐘趨勢`}>
-                  <ResponsiveContainer width="100%" height={isLast ? 96 : 72}>
+                  <ResponsiveContainer width="100%" height={isLast ? 84 : 60}>
                     <LineChart data={points} syncId="trend" margin={{ top: 6, right: 36, left: 0, bottom: 0 }}>
                       <XAxis
                         dataKey="timestamp"
@@ -97,7 +97,7 @@ export default function TrendPanel({ history, profile }: Props) {
                         stroke="var(--line)"
                         minTickGap={48}
                       />
-                      <YAxis domain={[meta.scaleMin, meta.scaleMax]} hide />
+                      <YAxis domain={[scaleMin, scaleMax]} hide />
                       <ReferenceArea y1={spec.normal[0]} y2={spec.normal[1]} fill="var(--band)" fillOpacity={1} stroke="none" ifOverflow="hidden" />
                       {segments.map(([x1, x2]) => (
                         <ReferenceArea key={x1} x1={x1} x2={x2} fill="var(--alarm-shade)" fillOpacity={1} stroke="none" ifOverflow="hidden" />
@@ -106,12 +106,12 @@ export default function TrendPanel({ history, profile }: Props) {
                       <ReferenceLine y={spec.danger} stroke="var(--danger-mark)" strokeDasharray="2 3" ifOverflow="hidden" />
                       <Tooltip
                         labelFormatter={(t) => fmtTime(Number(t))}
-                        formatter={(v) => [`${Number(v).toFixed(meta.decimals)} ${spec.unit}`, spec.label]}
+                        formatter={(v) => [`${Number(v).toFixed(spec.decimals)} ${spec.unit}`, spec.label]}
                         contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", fontFamily: "var(--font-mono)", fontSize: 12 }}
                         labelStyle={{ color: "var(--muted)" }}
                         itemStyle={{ color: "var(--text)" }}
                       />
-                      <Line type="monotone" dataKey={tag} stroke="var(--pen)" strokeWidth={1.6} dot={false} isAnimationActive={false} />
+                      <Line type="monotone" dataKey={(p: PlcData) => getValue(p, tag)} name={spec.label} stroke="var(--pen)" strokeWidth={1.6} dot={false} isAnimationActive={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>

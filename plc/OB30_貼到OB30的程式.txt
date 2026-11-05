@@ -1,9 +1,14 @@
 ﻿// 這不是源文件，不要用「從源生成塊」匯入
-// 手動建立 OB30（Cyclic interrupt，循環時間 100 ms，語言 SCL），把下面這段貼進去
-"MachineSim_DB"(Enable := "DB1".motor_enable,
-                Setpoint := "DB1".speed_setpoint,
-                FaultMode := "DB1".fault_mode,
-                CycleTime := 0.1,
-                Speed => "DB1".motor_speed,
-                Temperature => "DB1".temperature,
-                Pressure => "DB1".pressure);
+// 取代 OB30 原本的內容（v0.2：新增 Vibration、Current 兩個輸出）
+// legacy_random = TRUE 時改用 OB1 的舊亂數程式，這裡不寫入，避免兩邊搶同一個變數
+IF NOT "DB1".legacy_random THEN
+    "MachineSim_DB"(Enable := "DB1".motor_enable,
+                    Setpoint := "DB1".speed_setpoint,
+                    FaultMode := "DB1".fault_mode,
+                    CycleTime := 0.1,
+                    Speed => "DB1".motor_speed,
+                    Temperature => "DB1".temperature,
+                    Pressure => "DB1".pressure,
+                    Vibration => "DB1".vibration,
+                    Current => "DB1".current);
+END_IF;

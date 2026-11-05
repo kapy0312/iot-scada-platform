@@ -1,6 +1,6 @@
 import type { PlcData } from "../hooks/useWebSocket";
 import type { Alarm } from "../hooks/useAlarms";
-import { LEVEL_TEXT, TAG_KEYS, evaluate, type DeviceProfile } from "../deviceProfile";
+import { LEVEL_TEXT, evaluate, getValue, tagKeys, type DeviceProfile } from "../deviceProfile";
 import { extractManualRefs } from "../api";
 import { DangerIcon, WarningIcon } from "./Icons";
 
@@ -20,7 +20,13 @@ interface Props {
 const fmt = (t: number) => new Date(t * 1000).toLocaleTimeString("zh-TW", { hour12: false });
 
 export function describeStatus(profile: DeviceProfile, data: PlcData): string {
-  return TAG_KEYS.map((k) => `${profile.tags[k].label}${LEVEL_TEXT[evaluate(profile.tags[k], data[k])]}`).join("、");
+  return tagKeys(profile)
+    .map((k) => {
+      const v = getValue(data, k);
+      return v === null ? null : `${profile.tags[k].label}${LEVEL_TEXT[evaluate(profile.tags[k], v)]}`;
+    })
+    .filter(Boolean)
+    .join("、");
 }
 
 export default function AlarmPanel({ data, alarms, threshold, diagnosis }: Props) {
@@ -32,6 +38,8 @@ export default function AlarmPanel({ data, alarms, threshold, diagnosis }: Props
     !anomaly ? "等待資料"
     : anomaly.status === "collecting_data" ? "收集資料中（需要 30 筆才開始判斷）"
     : anomaly.status === "warming_up" ? `暖機中（剩 ${anomaly.remaining ?? "?"} 筆）`
+    : anomaly.status === "model_mismatch" ? `模型需要的訊號沒讀到：${(anomaly.missing ?? []).join("、")}`
+    : anomaly.status === "suspect" ? "疑似異常，觀察中（需連續 5 秒才判定）"
     : anomaly.is_anomaly ? "判定異常" : "正常";
 
   return (
@@ -64,9 +72,11 @@ export default function AlarmPanel({ data, alarms, threshold, diagnosis }: Props
       <div className="kv">
         <span className="muted">異常分數／門檻</span>
         <span className="mono">
-          {typeof anomaly?.score === "number" ? anomaly.score.toFixed(4) : "—"} / {threshold}
+          {typeof anomaly?.score === "number" ? anomaly.score.toFixed(4) : "—"} / {anomaly?.threshold ?? threshold}
         </span>
       </div>
+
+      {anomaly?.note && <p className="small muted" style={{ margin: "6px 0 0" }}>{anomaly.note}</p>}
 
       <div style={{ borderTop: "1px solid var(--line)", marginTop: 12, paddingTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
         {diagnosis ? (
@@ -79,7 +89,7 @@ export default function AlarmPanel({ data, alarms, threshold, diagnosis }: Props
             {refs.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
                 {refs.map((r) => (
-                  <span key={r} className="ref-tag">手冊 {r}</span>
+                  <span key={r} className="ref-tag">{r}</span>
                 ))}
               </div>
             )}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getDataSource, setDataSource, type Source } from "../api";
+import { getDataSource, getModelInfo, reloadModel, setDataSource, type ModelInfo, type Source } from "../api";
 import { WS_URL } from "../config";
 
 interface Props {
@@ -13,10 +13,24 @@ export default function SystemSettings({ historyCount, threshold, profileFromSer
   const [current, setCurrent] = useState<Source | null>(null);
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [model, setModel] = useState<ModelInfo | null>(null);
+  const [reloading, setReloading] = useState(false);
 
   useEffect(() => {
     getDataSource().then(setCurrent).catch(() => setError("無法取得目前資料源"));
+    getModelInfo().then(setModel).catch(() => setModel(null));
   }, []);
+
+  const onReload = async () => {
+    setReloading(true);
+    try {
+      setModel(await reloadModel());
+    } catch {
+      setError("重新載入模型失敗");
+    } finally {
+      setReloading(false);
+    }
+  };
 
   const switchTo = async (source: Source) => {
     if (source === current || switching) return;
@@ -37,8 +51,11 @@ export default function SystemSettings({ historyCount, threshold, profileFromSer
     ["WebSocket", WS_URL],
     ["最後更新", lastUpdate ? new Date(lastUpdate * 1000).toLocaleString("zh-TW", { hour12: false }) : "—"],
     ["趨勢緩衝", `${historyCount} / 600 筆（10 分鐘）`],
-    ["異常模型", "Isolation Forest（30 筆視窗 · 15 特徵）"],
-    ["異常門檻", `分數低於 ${threshold}`],
+    ["異常模型", model?.loaded ? `Isolation Forest（30 筆視窗 · ${model.feature_count ?? "?"} 特徵）` : "尚未載入"],
+    ["模型檔", model?.file ?? "—"],
+    ["訓練資料來源", model?.trained_on ? `${model.trained_on}${model.samples ? `（${model.samples} 筆）` : ""}` : "—"],
+    ["模型使用的訊號", model?.tags?.join("、") ?? "—"],
+    ["異常門檻", `分數連續 5 秒低於 ${model?.threshold ?? threshold}`],
     ["設備規格來源", profileFromServer ? "後端 /api/device-profile" : "前端預設值（後端未回應）"],
   ];
 
@@ -69,9 +86,15 @@ export default function SystemSettings({ historyCount, threshold, profileFromSer
         {rows.map(([k, v]) => (
           <div className="kv" key={k}>
             <span className="muted">{k}</span>
-            <span className="mono">{v}</span>
+            <span className="mono" style={{ textAlign: "right", overflowWrap: "anywhere" }}>{v}</span>
           </div>
         ))}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+          <button type="button" className="btn" onClick={onReload} disabled={reloading}>
+            {reloading ? "載入中…" : "重新載入最新模型"}
+          </button>
+          <span className="small muted">手動訓練（python -m ml.train）後按這裡，不必重啟後端</span>
+        </div>
       </section>
     </div>
   );

@@ -1,10 +1,10 @@
+import os
 from fastapi import APIRouter
 from pydantic import BaseModel, field_validator
-import asyncio
 from asyncua import Client
 from asyncua.ua import DataValue, Variant, VariantType
 
-PLC_URL = "opc.tcp://192.168.0.10:4840"
+PLC_URL = os.getenv("PLC_URL", "opc.tcp://192.168.0.10:4840")
 NS      = 3
 
 router = APIRouter()

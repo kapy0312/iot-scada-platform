@@ -7,14 +7,19 @@ export interface AnomalyResult {
   score: number;
   status: string;
   remaining?: number;
+  missing?: string[];
+  threshold?: number;   // 目前模型的門檻（每個模型不同）
+  rule_alarm?: boolean; // 任一訊號達警戒值或危險值
+  note?: string;
   ai_analysis?: string;
 }
 
 export interface PlcData {
   timestamp: number;
-  motor_speed: number;
-  temperature: number;
-  pressure: number;
+  values?: Record<string, number>; // 所有訊號（依設備規格），新後端提供
+  motor_speed?: number;            // 頂層欄位：舊後端相容
+  temperature?: number;
+  pressure?: number;
   motor_enable: number;
   anomaly: AnomalyResult;
   source?: string;

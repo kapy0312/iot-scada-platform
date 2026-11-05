@@ -2,14 +2,15 @@
 TITLE = Motor and pump machine simulation for PLCSIM
 { S7_Optimized_Access := 'TRUE' }
 AUTHOR : Kevin
-VERSION : 0.1
+VERSION : 0.2
 // 模擬「馬達帶動泵浦」的機台，讓 PLCSIM 的數值會隨啟停、設定值與故障模式變化
 // 由 OB30（循環中斷 100 ms）呼叫
+// v0.2：新增振動、馬達電流與故障 4（軸承磨損）、5（機械卡滯）
 
    VAR_INPUT
       Enable : Bool;             // 馬達啟動（DB1.motor_enable）
       Setpoint : Real;           // 轉速設定值 RPM（DB1.speed_setpoint）
-      FaultMode : Int;           // 0=正常 1=下游阻塞背壓過高 2=冷卻風扇故障 3=負載突然降低
+      FaultMode : Int;           // 0=正常 1=下游阻塞背壓過高 2=冷卻風扇故障 3=負載突然降低 4=軸承磨損 5=機械卡滯
       CycleTime : Real := 0.1;   // 呼叫週期（秒），要跟 OB30 的循環時間一致
    END_VAR
 
@@ -17,12 +18,16 @@ VERSION : 0.1
       Speed : Real;              // 馬達轉速 RPM
       Temperature : Real;        // 溫度 °C
       Pressure : Real;           // 壓力 bar
+      Vibration : Real;          // 振動速度 mm/s RMS
+      Current : Real;            // 馬達電流 A
    END_VAR
 
    VAR
       statSpeed : Real := 0.0;
       statTemp : Real := 25.0;
       statPress : Real := 0.3;
+      statVib : Real := 0.0;
+      statCurrent : Real := 0.0;
       seed : UDInt := 12345;
    END_VAR
 
@@ -30,10 +35,15 @@ VERSION : 0.1
       speedTarget : Real;
       tempTarget : Real;
       pressTarget : Real;
+      vibTarget : Real;
+      currentTarget : Real;
+      tauVib : Real;
       ratio : Real;
       n1 : Real;
       n2 : Real;
       n3 : Real;
+      n4 : Real;
+      n5 : Real;
    END_VAR
 
    VAR CONSTANT
@@ -43,6 +53,9 @@ VERSION : 0.1
       TAU_SPEED : Real := 3.0;       // 轉速時間常數（秒）：約 3 秒反應
       TAU_PRESS : Real := 2.0;       // 壓力跟著轉速走，反應快
       TAU_TEMP : Real := 20.0;       // 溫度有熱慣性，反應慢
+      TAU_CURRENT : Real := 1.0;     // 電流跟著負載走，反應最快
+      TAU_VIB : Real := 5.0;         // 振動一般反應
+      TAU_BEARING : Real := 15.0;    // 軸承磨損造成的振動是慢慢變大的
    END_VAR
 
 
@@ -54,10 +67,12 @@ BEGIN
 	    #speedTarget := 0.0;
 	END_IF;
 
-	IF #FaultMode = 3 THEN
-	    // 負載突然降低：轉速失控上升（手冊 2.1／5.1）
-	    #speedTarget := #speedTarget * 1.2;
-	END_IF;
+	CASE #FaultMode OF
+	    3:  // 負載突然降低：轉速失控上升（手冊 2.1／5.1）
+	        #speedTarget := #speedTarget * 1.2;
+	    5:  // 機械卡滯：負載阻力變大，轉速被拖慢（手冊3 4.2）
+	        #speedTarget := #speedTarget * 0.85;
+	END_CASE;
 
 	#statSpeed := #statSpeed + (#speedTarget - #statSpeed) * #CycleTime / #TAU_SPEED;
 	#ratio := #statSpeed / #RATED_SPEED;
@@ -81,20 +96,61 @@ BEGIN
 	        #tempTarget := #tempTarget + 35.0;
 	    3:  // 高速摩擦生熱
 	        #tempTarget := #tempTarget + 15.0;
+	    4:  // 軸承摩擦生熱
+	        #tempTarget := #tempTarget + 8.0;
+	    5:  // 卡滯時馬達長時間過載
+	        #tempTarget := #tempTarget + 25.0;
 	END_CASE;
 	#statTemp := #statTemp + (#tempTarget - #statTemp) * #CycleTime / #TAU_TEMP;
 
-	// ---------- 4. 雜訊：簡單亂數，讓數值像真實感測器 ----------
+	// ---------- 4. 馬達電流：空載電流＋負載電流（泵浦負載約與轉速平方成正比） ----------
+	// 額定轉速時約 24 A；馬達停止時為 0
+	#currentTarget := 8.0 * LIMIT(MN := 0.0, IN := #ratio * 5.0, MX := 1.0) + 16.0 * #ratio * #ratio;
+	CASE #FaultMode OF
+	    1:  // 背壓過高，泵浦負載增加
+	        #currentTarget := #currentTarget * 1.12;
+	    3:  // 負載降低，電流下降
+	        #currentTarget := #currentTarget * 0.6;
+	    4:  // 軸承摩擦，電流小幅上升
+	        #currentTarget := #currentTarget + 1.5;
+	    5:  // 機械卡滯，電流大幅上升
+	        #currentTarget := #currentTarget + 10.0;
+	END_CASE;
+	#statCurrent := #statCurrent + (#currentTarget - #statCurrent) * #CycleTime / #TAU_CURRENT;
+
+	// ---------- 5. 振動：隨轉速平方增加，額定轉速時約 1.2 mm/s ----------
+	#vibTarget := 0.4 * LIMIT(MN := 0.0, IN := #ratio * 5.0, MX := 1.0) + 0.8 * #ratio * #ratio;
+	#tauVib := #TAU_VIB;
+	CASE #FaultMode OF
+	    1:  // 背壓造成泵浦輕微擾動
+	        #vibTarget := #vibTarget + 0.3;
+	    3:  // 超速帶來的不平衡
+	        #vibTarget := #vibTarget + 0.5;
+	    4:  // 軸承磨損：振動明顯且逐漸增加（手冊3 2.1）
+	        #vibTarget := #vibTarget + 3.0;
+	        #tauVib := #TAU_BEARING;
+	    5:  // 卡滯造成負載波動
+	        #vibTarget := #vibTarget + 1.0;
+	END_CASE;
+	#statVib := #statVib + (#vibTarget - #statVib) * #CycleTime / #tauVib;
+
+	// ---------- 6. 雜訊：簡單亂數，讓數值像真實感測器 ----------
 	#seed := (#seed * UDINT#75 + UDINT#74) MOD UDINT#65537;
 	#n1 := UDINT_TO_REAL(#seed MOD UDINT#2001) / 1000.0 - 1.0;
 	#seed := (#seed * UDINT#75 + UDINT#74) MOD UDINT#65537;
 	#n2 := UDINT_TO_REAL(#seed MOD UDINT#2001) / 1000.0 - 1.0;
 	#seed := (#seed * UDINT#75 + UDINT#74) MOD UDINT#65537;
 	#n3 := UDINT_TO_REAL(#seed MOD UDINT#2001) / 1000.0 - 1.0;
+	#seed := (#seed * UDINT#75 + UDINT#74) MOD UDINT#65537;
+	#n4 := UDINT_TO_REAL(#seed MOD UDINT#2001) / 1000.0 - 1.0;
+	#seed := (#seed * UDINT#75 + UDINT#74) MOD UDINT#65537;
+	#n5 := UDINT_TO_REAL(#seed MOD UDINT#2001) / 1000.0 - 1.0;
 
 	#Speed := MAX(IN1 := 0.0, IN2 := #statSpeed + #n1 * 4.0);
 	#Temperature := #statTemp + #n2 * 0.3;
 	#Pressure := MAX(IN1 := 0.0, IN2 := #statPress + #n3 * 0.05);
+	#Vibration := MAX(IN1 := 0.0, IN2 := #statVib + #n4 * 0.05);
+	#Current := MAX(IN1 := 0.0, IN2 := #statCurrent + #n5 * 0.2);
 
 END_FUNCTION_BLOCK
 

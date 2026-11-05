@@ -3,19 +3,23 @@ import os
 import random
 import time
 from asyncua import Client
+from core.device_profile import evaluate, get_profile, get_tags
 from core.ws_manager import manager
 from db.writer import write_to_db
 from db.anomaly_writer import write_anomaly_event
 from ml.inferencer import AnomalyDetector
 from ml.ollama_analyzer import analyze_anomaly
 
-detector = AnomalyDetector(model_dir="models")
+detector = AnomalyDetector()
+OLLAMA_COOLDOWN = 60.0      # 同一次事件內，兩次 AI 診斷至少間隔 60 秒
+INCIDENT_GAP = 60.0         # 正常超過 60 秒後再異常，視為新事件（與 MCP、前端事件合併規則一致）
 _last_ollama_call = 0.0
-OLLAMA_COOLDOWN   = 60.0
+_last_anomaly_at = 0.0
 _latest_ai_analysis: str = ""
 
 PLC_URL = os.getenv("PLC_URL", "opc.tcp://192.168.0.10:4840")
-NS      = 3
+NS = 3
+DB1_PATH = ["0:Objects", f"{NS}:PLC_1", f"{NS}:DataBlocksGlobal", f"{NS}:DB1"]
 
 VALID_SOURCES = ("opcua", "mock")
 # OPC UA 來源寫入用的 device_id：接實機用 S7-1511T（預設）；接 PLCSIM 時設成 S7-1511T-SIM，避免模擬資料進入訓練集
@@ -26,28 +30,34 @@ if current_source not in VALID_SOURCES:
 
 _polling_task: asyncio.Task | None = None
 
-MOCK_BASELINE = {"motor_speed": 1480.0, "temperature": 70.0, "pressure": 5.0}
+# 內建模擬（mock）：每個訊號的基準值、雜訊、模擬異常時的目標值
+# 沒列在這裡的訊號，mock 模式不會產生
+MOCK_SIGNALS = {
+    "motor_speed": {"base": 1480.0, "noise": 8.0,  "anomaly": 1780.0},
+    "temperature": {"base": 70.0,   "noise": 0.4,  "anomaly": 105.0},
+    "pressure":    {"base": 5.0,    "noise": 0.1,  "anomaly": 9.5},
+    "vibration":   {"base": 1.2,    "noise": 0.05, "anomaly": 5.0},
+    "current":     {"base": 24.0,   "noise": 0.3,  "anomaly": 32.0},
+}
 
-
-_anomaly_override: dict | None = None
+_anomaly_override: bool = False
 _anomaly_deadline: float = 0.0
+
 
 def get_active_device_id() -> str:
     """依目前資料源回傳寫入用的 device_id；mock 與 PLCSIM 的資料獨立標記，避免污染訓練集"""
     return "S7-1511T-MOCK" if current_source == "mock" else OPCUA_DEVICE_ID
 
+
 def trigger_mock_anomaly(duration_seconds: float = 20.0):
     """讓 mock 資料源在指定秒數內朝異常值靠攏，僅限 mock 來源可用"""
     global _anomaly_override, _anomaly_deadline
     if current_source != "mock":
-        raise ValueError("僅 mock 資料源可觸發模擬異常")
-    _anomaly_override = {
-        "motor_speed": 1780.0,
-        "temperature": 105.0,
-        "pressure": 9.5,
-    }
+        raise ValueError("僅 mock 資料源可觸發模擬異常；PLCSIM 請用 tools/plcsim_ctl.py fault")
+    _anomaly_override = True
     _anomaly_deadline = time.time() + duration_seconds
     print(f"[PLC] 模擬異常已觸發，持續 {duration_seconds} 秒")
+
 
 def start_polling():
     """依 current_source 建立輪詢任務，main.py lifespan 啟動時呼叫一次"""
@@ -56,19 +66,18 @@ def start_polling():
 
 
 def stop_polling():
-    """main.py lifespan 關閉時呼叫"""
     if _polling_task:
         _polling_task.cancel()
 
 
 async def switch_source(new_source: str):
     """切換資料源：取消目前輪詢任務、清空 ML 滑動視窗、重建任務"""
-    global current_source, _polling_task
+    global current_source, _polling_task, _anomaly_override
     if new_source not in VALID_SOURCES:
         raise ValueError(f"不支援的資料源：{new_source}，僅支援 {VALID_SOURCES}")
 
     if new_source == current_source and _polling_task and not _polling_task.done():
-        return  # 已經是目前來源，不需重建
+        return
 
     if _polling_task:
         _polling_task.cancel()
@@ -78,11 +87,9 @@ async def switch_source(new_source: str):
             pass
 
     current_source = new_source
-    detector.buffer.clear()  # 避免視窗混雜不同來源的殘留數值
-    global _anomaly_override
-    _anomaly_override = None
+    detector.buffer.clear()
+    _anomaly_override = False
     print(f"[PLC] 資料源切換為：{current_source}，ML 滑動視窗已清空")
-
     _polling_task = asyncio.create_task(_run_source_loop())
 
 
@@ -95,32 +102,32 @@ async def _run_source_loop():
 
 
 async def _opcua_poll_loop():
-    print("[PLC] 啟動 OPC UA 連線...")
+    print(f"[PLC] 啟動 OPC UA 連線：{PLC_URL}")
     while True:
         try:
             async with Client(url=PLC_URL) as client:
-                print("[PLC] ✅ 連線成功，開始輪詢")
-
-                motor_speed_node = await client.nodes.root.get_child(
-                    [f"0:Objects", f"{NS}:PLC_1", f"{NS}:DataBlocksGlobal",
-                     f"{NS}:DB1", f"{NS}:motor_speed"]
-                )
-                temperature_node = await client.nodes.root.get_child(
-                    [f"0:Objects", f"{NS}:PLC_1", f"{NS}:DataBlocksGlobal",
-                     f"{NS}:DB1", f"{NS}:temperature"]
-                )
-                pressure_node = await client.nodes.root.get_child(
-                    [f"0:Objects", f"{NS}:PLC_1", f"{NS}:DataBlocksGlobal",
-                     f"{NS}:DB1", f"{NS}:pressure"]
-                )
+                profile = get_profile(get_active_device_id()) or {"tags": {}}
+                nodes = {}
+                for tag, spec in profile["tags"].items():
+                    try:
+                        nodes[tag] = await client.nodes.root.get_child(DB1_PATH + [f"{NS}:{spec['node']}"])
+                    except Exception:
+                        # PLC 程式還沒有這個變數：略過它，其餘訊號照常讀
+                        print(f"[PLC] ⚠ DB1 找不到變數 {spec['node']}，略過訊號 {tag}")
+                if not nodes:
+                    raise RuntimeError("DB1 裡找不到任何設備規格列出的變數")
+                try:
+                    enable_node = await client.nodes.root.get_child(DB1_PATH + [f"{NS}:motor_enable"])
+                except Exception:
+                    enable_node = None
+                print(f"[PLC] ✅ 連線成功，讀取 {len(nodes)} 個訊號：{', '.join(nodes)}")
 
                 while True:
-                    spd = await motor_speed_node.read_value()
-                    tmp = await temperature_node.read_value()
-                    prs = await pressure_node.read_value()
-                    await _process_reading(
-                        round(float(spd), 2), round(float(tmp), 3), round(float(prs), 3)
-                    )
+                    values = {}
+                    for tag, node in nodes.items():
+                        values[tag] = round(float(await node.read_value()), 3)
+                    enabled = int(bool(await enable_node.read_value())) if enable_node else 1
+                    await _process_reading(values, enabled)
                     await asyncio.sleep(1)
         except asyncio.CancelledError:
             raise
@@ -131,72 +138,85 @@ async def _opcua_poll_loop():
 
 
 async def _mock_poll_loop():
-    global _anomaly_override, _anomaly_deadline
-    spd = MOCK_BASELINE["motor_speed"]
-    tmp = MOCK_BASELINE["temperature"]
-    prs = MOCK_BASELINE["pressure"]
+    global _anomaly_override
+    tags = [t for t in get_tags(get_active_device_id()) if t in MOCK_SIGNALS]
+    values = {t: MOCK_SIGNALS[t]["base"] for t in tags}
     while True:
-        if _anomaly_override and time.time() < _anomaly_deadline:
-            # 朝異常目標值靠攏（每秒推進 40%），而非瞬間跳變，較貼近真實故障發展過程
-            target = _anomaly_override
-            spd = spd + (target["motor_speed"] - spd) * 0.4 + random.gauss(0, 5)
-            tmp = tmp + (target["temperature"] - tmp) * 0.4 + random.gauss(0, 0.5)
-            prs = prs + (target["pressure"] - prs) * 0.4 + random.gauss(0, 0.2)
-        else:
-            if _anomaly_override and time.time() >= _anomaly_deadline:
-                _anomaly_override = None
-                print("[PLC] 模擬異常結束，回復正常波動")
-            spd = max(0.0, spd + random.gauss(0, 8) + 0.02 * (MOCK_BASELINE["motor_speed"] - spd))
-            tmp = max(0.0, tmp + random.gauss(0, 0.4) + 0.02 * (MOCK_BASELINE["temperature"] - tmp))
-            prs = max(0.0, prs + random.gauss(0, 0.1) + 0.02 * (MOCK_BASELINE["pressure"] - prs))
-
-        await _process_reading(round(spd, 2), round(tmp, 3), round(prs, 3))
+        anomalous = _anomaly_override and time.time() < _anomaly_deadline
+        if _anomaly_override and not anomalous:
+            _anomaly_override = False
+            print("[PLC] 模擬異常結束，回復正常波動")
+        for t in tags:
+            sig = MOCK_SIGNALS[t]
+            if anomalous:
+                # 朝異常目標值靠攏（每秒推進 40%），而非瞬間跳變，較貼近真實故障發展過程
+                values[t] += (sig["anomaly"] - values[t]) * 0.4 + random.gauss(0, sig["noise"] * 0.6)
+            else:
+                values[t] += random.gauss(0, sig["noise"]) + 0.02 * (sig["base"] - values[t])
+            values[t] = max(0.0, values[t])
+        await _process_reading({t: round(v, 3) for t, v in values.items()})
         await asyncio.sleep(1)
 
 
-async def _process_reading(spd: float, tmp: float, prs: float):
+async def _process_reading(values: dict, motor_enable: int = 1):
+    """
+    每秒一次：ML 推論 → 判斷告警 → 必要時觸發 AI 診斷 → 推送畫面、寫入資料庫
+
+    兩種告警來源分開看：
+    - 規格告警（rule_alarm）：任一訊號達警戒值或危險值，依設備規格判斷，反應最快
+    - ML 異常（is_anomaly）：Isolation Forest 看多訊號組合，能抓到「各自都還沒超標」的異常
+    AI 診斷在「規格告警」或「ML 異常且有訊號超出正常範圍」時觸發；
+    ML 異常但所有訊號都正常時，多半是統計雜訊，只記錄不診斷。
+    """
+    global _last_ollama_call, _last_anomaly_at, _latest_ai_analysis
     device_id = get_active_device_id()
+    now = time.time()
+
+    anomaly = detector.update(values)
+
+    profile = get_profile(device_id) or {"tags": {}}
+    levels = {tag: evaluate(spec, values[tag]) for tag, spec in profile["tags"].items() if values.get(tag) is not None}
+    rule_alarm = any(lv in ("warning", "danger") for lv in levels.values())
+    out_of_range = any(lv != "normal" for lv in levels.values())
+    anomaly["rule_alarm"] = rule_alarm
+    abnormal = bool(anomaly.get("is_anomaly")) or rule_alarm
+
+    if abnormal:
+        if now - _last_anomaly_at > INCIDENT_GAP:
+            # 新的一次事件：清掉上一次的診斷，並允許立刻重新診斷
+            _latest_ai_analysis = ""
+            _last_ollama_call = 0.0
+        _last_anomaly_at = now
+
+        should_diagnose = rule_alarm or (anomaly.get("is_anomaly") and out_of_range)
+        if not should_diagnose:
+            anomaly["note"] = "所有訊號都在正常範圍內，未觸發 AI 診斷"
+        elif now - _last_ollama_call > OLLAMA_COOLDOWN:
+            _last_ollama_call = now
+            asyncio.create_task(_fetch_ollama_analysis(dict(values), anomaly, device_id))
+
+        if _latest_ai_analysis:
+            anomaly["ai_analysis"] = _latest_ai_analysis
 
     data = {
-        "timestamp": time.time(),
-        "motor_speed": spd,
-        "temperature": tmp,
-        "pressure": prs,
-        "motor_enable": 1,
+        "timestamp": now,
+        **values,              # 頂層保留各訊號欄位，相容舊前端
+        "values": values,      # 新前端讀這個
+        "motor_enable": motor_enable,
+        "anomaly": anomaly,
+        "source": current_source,
+        "device_id": device_id,
     }
-    anomaly = detector.update(data)
-
-    global _last_ollama_call, _latest_ai_analysis
-    now = time.time()
-    if (anomaly.get("is_anomaly") and
-        anomaly.get("status") == "anomaly" and
-        now - _last_ollama_call > OLLAMA_COOLDOWN):
-        _last_ollama_call = now
-        asyncio.create_task(_fetch_ollama_analysis(data, anomaly, device_id))
-
-    if anomaly.get("is_anomaly") and _latest_ai_analysis:
-        anomaly["ai_analysis"] = _latest_ai_analysis
-
-    data["anomaly"] = anomaly
-    data["source"] = current_source
-    data["device_id"] = device_id
 
     await manager.broadcast(data)
-    asyncio.create_task(write_to_db(device_id, data))
+    asyncio.create_task(write_to_db(device_id, values))
+    if abnormal:
+        asyncio.create_task(write_anomaly_event(device_id, values, anomaly))
 
-    if anomaly.get("is_anomaly"):
-        asyncio.create_task(write_anomaly_event(device_id, data, anomaly))
 
-
-async def _fetch_ollama_analysis(data: dict, anomaly: dict, device_id: str):
+async def _fetch_ollama_analysis(values: dict, anomaly: dict, device_id: str):
     global _latest_ai_analysis
-    analysis = await analyze_anomaly({
-        "motor_speed":   data.get("motor_speed"),
-        "temperature":   data.get("temperature"),
-        "pressure":      data.get("pressure"),
-        "anomaly_score": anomaly.get("score", 0),
-    }, device_id=device_id)
+    analysis = await analyze_anomaly(values, device_id=device_id)
     _latest_ai_analysis = analysis
     anomaly["ai_analysis"] = analysis
-    await manager.broadcast(data)
     print(f"[Ollama] 分析完成：\n{analysis}")

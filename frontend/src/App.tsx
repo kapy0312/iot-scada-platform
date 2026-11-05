@@ -84,7 +84,11 @@ export default function App() {
                 />
               </div>
             </div>
-            <EventLog deviceId={deviceId} isAnomaly={data?.anomaly?.is_anomaly ?? false} profile={profile} />
+            <EventLog
+              deviceId={deviceId}
+              isAnomaly={Boolean(data?.anomaly?.is_anomaly || data?.anomaly?.rule_alarm)}
+              profile={profile}
+            />
           </>
         )}
 

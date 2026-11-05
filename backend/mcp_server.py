@@ -7,6 +7,7 @@ IIoT SCADA MCP Server（本機、唯讀）
 
 手動測試（不經過 Claude）：python tools/test_mcp_tools.py
 """
+import json
 import os
 import sys
 from datetime import datetime, timedelta
@@ -22,7 +23,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from core.device_profile import ANOMALY_THRESHOLD, DEVICE_PROFILES, base_device_id, get_profile
+from core.device_profile import ANOMALY_THRESHOLD, DEVICE_PROFILES, LEVEL_TEXT, base_device_id, evaluate, get_profile
 from rag.embedder import embed_text
 from rag.qdrant_client import list_documents, search as qdrant_search
 
@@ -33,7 +34,7 @@ DATABASE_URL = os.getenv(
 LOCAL_TZ = ZoneInfo("Asia/Taipei")
 INCIDENT_GAP_SECONDS = 60   # 兩筆異常紀錄間隔超過 60 秒，視為不同次事件
 MAX_TREND_POINTS = 240      # 趨勢最多回傳幾個時間點，避免塞爆對話
-TAGS = ("motor_speed", "temperature", "pressure")
+LEGACY_COLUMNS = ("motor_speed", "temperature", "pressure")
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 
@@ -128,10 +129,30 @@ def _group_incidents(rows: list) -> list[dict]:
     return incidents
 
 
+def _readings(row) -> dict:
+    """新紀錄用 readings（JSONB，所有訊號）；舊紀錄沒有 readings 時用三個舊欄位"""
+    raw = row["readings"]
+    if raw:
+        return json.loads(raw) if isinstance(raw, str) else dict(raw)
+    return {c: row[c] for c in LEGACY_COLUMNS if row[c] is not None}
+
+
 def _summarize(rows: list) -> dict:
-    def peak(col):
-        vals = [r[col] for r in rows if r[col] is not None]
-        return {"max": _round(max(vals)), "min": _round(min(vals))} if vals else None
+    readings = [_readings(r) for r in rows]
+    profile = get_profile(rows[0]["device_id"]) or {"tags": {}}
+    tags = list(profile["tags"]) or sorted({k for rd in readings for k in rd})
+    signals = {}
+    for tag in tags:
+        vals = [rd[tag] for rd in readings if rd.get(tag) is not None]
+        if not vals:
+            continue
+        info = {"max": _round(max(vals)), "min": _round(min(vals))}
+        spec = profile["tags"].get(tag)
+        if spec:
+            info["label"] = spec["label"]
+            info["unit"] = spec["unit"]
+            info["peak_level"] = LEVEL_TEXT[evaluate(spec, max(vals))]
+        signals[tag] = info
 
     analyses = [r["ai_analysis"] for r in rows if r["ai_analysis"]]
     return {
@@ -142,9 +163,7 @@ def _summarize(rows: list) -> dict:
         "records": len(rows),
         "lowest_anomaly_score": _round(min(r["anomaly_score"] for r in rows if r["anomaly_score"] is not None), 4)
             if any(r["anomaly_score"] is not None for r in rows) else None,
-        "motor_speed": peak("motor_speed"),
-        "temperature": peak("temperature"),
-        "pressure": peak("pressure"),
+        "signals": signals,
         # 事件開頭幾秒可能還掛著上一次的診斷，取最後一筆較可靠
         "ai_analysis": analyses[-1] if analyses else None,
     }
@@ -168,11 +187,11 @@ async def list_anomalies(
     - hours：只填 end 或都不填時，往前查幾小時（預設 24）
 
     每個事件含：起訖時間、持續秒數、最低異常分數（越低越異常，低於 0.05 判定異常）、
-    三個訊號的最高與最低值、當時 AI 的兩行診斷。
+    每個訊號的最高與最低值（含峰值對照手冊規格的判定）、當時 AI 的兩行診斷。
     """
     start_dt, end_dt = _time_range(start, end, hours)
     sql = """
-        SELECT time, device_id, anomaly_score, motor_speed, temperature, pressure, ai_analysis
+        SELECT time, device_id, anomaly_score, motor_speed, temperature, pressure, ai_analysis, readings
         FROM anomaly_events
         WHERE time >= $1 AND time < $2
     """
@@ -314,7 +333,8 @@ async def get_device_info(device_id: str = "S7-1511T") -> dict:
         "device_id": device_id,
         "data_source": "後端內建模擬" if device_id.endswith("-MOCK") else "PLCSIM 模擬" if device_id.endswith("-SIM") else "真實 PLC",
         "profile": profile or f"沒有 {manual_device} 的規格資料，已知設備：{list(DEVICE_PROFILES)}",
-        "anomaly_rule": f"Isolation Forest 分數低於 {ANOMALY_THRESHOLD} 判定異常（分數越低越異常）",
+        "anomaly_rule": "Isolation Forest 分數連續 5 秒低於模型門檻才判定異常（分數越低越異常）；"
+                        f"門檻由訓練資料決定，舊模型為 {ANOMALY_THRESHOLD}",
         "devices_in_db_last_30_days": [
             {"device_id": r["device_id"], "first_seen": _fmt(r["first_seen"]), "last_seen": _fmt(r["last_seen"])}
             for r in rows

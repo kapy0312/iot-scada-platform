@@ -5,7 +5,7 @@
     python tools/plcsim_ctl.py status          # 讀目前數值
     python tools/plcsim_ctl.py run             # 啟動馬達，轉速設定 1480
     python tools/plcsim_ctl.py stop            # 停止馬達
-    python tools/plcsim_ctl.py fault 1         # 注入故障：1=背壓過高 2=冷卻風扇故障 3=負載降低
+    python tools/plcsim_ctl.py fault 1         # 注入故障：1=背壓過高 2=冷卻風扇故障 3=負載降低 4=軸承磨損 5=機械卡滯
     python tools/plcsim_ctl.py fault 0         # 解除故障
 """
 import asyncio
@@ -16,7 +16,14 @@ from asyncua import Client, ua
 
 PLC_URL = os.getenv("PLC_URL", "opc.tcp://192.168.0.10:4840")
 NS = 3
-FAULTS = {0: "正常", 1: "下游阻塞背壓過高（手冊 5.2）", 2: "冷卻風扇故障（手冊 3.1）", 3: "負載突然降低（手冊 5.1）"}
+FAULTS = {
+    0: "正常",
+    1: "下游阻塞背壓過高（手冊 5.2）",
+    2: "冷卻風扇故障（手冊 3.1）",
+    3: "負載突然降低（手冊 5.1）",
+    4: "軸承磨損（手冊3 4.1）",
+    5: "機械卡滯（手冊3 4.2）",
+}
 
 
 async def node(client: Client, name: str):
@@ -32,11 +39,18 @@ async def write(client: Client, name: str, value, vtype):
 
 async def status(client: Client):
     vals = {}
-    for name in ("motor_enable", "speed_setpoint", "fault_mode", "motor_speed", "temperature", "pressure"):
-        vals[name] = await (await node(client, name)).read_value()
+    for name in ("motor_enable", "speed_setpoint", "fault_mode", "motor_speed", "temperature", "pressure",
+                 "vibration", "current"):
+        try:
+            vals[name] = await (await node(client, name)).read_value()
+        except Exception:
+            vals[name] = None  # PLC 程式還沒有這個變數
     print(f"啟動={vals['motor_enable']}  設定={vals['speed_setpoint']:.0f} RPM  "
           f"故障={vals['fault_mode']}（{FAULTS.get(vals['fault_mode'], '?')}）")
     print(f"轉速={vals['motor_speed']:.1f} RPM  溫度={vals['temperature']:.2f} °C  壓力={vals['pressure']:.3f} bar")
+    vib = "（DB1 沒有此變數）" if vals["vibration"] is None else f"{vals['vibration']:.2f} mm/s"
+    cur = "（DB1 沒有此變數）" if vals["current"] is None else f"{vals['current']:.1f} A"
+    print(f"振動={vib}  電流={cur}")
 
 
 async def main():
