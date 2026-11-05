@@ -3,12 +3,15 @@ import { useEffect, useState } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useTheme } from "./hooks/useTheme";
 import { useAlarms } from "./hooks/useAlarms";
-import { useDeviceProfile } from "./deviceProfile";
+import { useDeviceProfile, type TagKey } from "./deviceProfile";
 import { WS_URL } from "./config";
 import StatusBar from "./components/StatusBar";
 import ProcessOverview from "./components/ProcessOverview";
-import TrendPanel from "./components/TrendPanel";
-import AlarmPanel, { describeStatus, type Diagnosis } from "./components/AlarmPanel";
+import TrendDialog from "./components/TrendDialog";
+import AlarmPanel, {
+  describeStatus,
+  type Diagnosis,
+} from "./components/AlarmPanel";
 import ControlPanel from "./components/ControlPanel";
 import EventLog from "./components/EventLog";
 import RagPanel from "./components/RagPanel";
@@ -25,8 +28,11 @@ export default function App() {
   const { data, history, isConnected, sendCommand } = useWebSocket(WS_URL);
   const { theme, toggle } = useTheme();
   const [tab, setTab] = useState<Tab>("monitor");
+  // 目前開啟詳細趨勢的訊號；null 代表彈出視窗關閉
+  const [trendTag, setTrendTag] = useState<TagKey | null>(null);
 
-  const deviceId = data?.device_id ?? (data?.source === "mock" ? "S7-1511T-MOCK" : "S7-1511T");
+  const deviceId =
+    data?.device_id ?? (data?.source === "mock" ? "S7-1511T-MOCK" : "S7-1511T");
   const { profile, threshold, fromServer } = useDeviceProfile(deviceId);
   const alarms = useAlarms(data, profile, threshold);
 
@@ -36,7 +42,13 @@ export default function App() {
   useEffect(() => {
     if (!data || !aiText) return;
     setDiagnosis((prev) =>
-      prev?.text === aiText ? prev : { text: aiText, at: data.timestamp, status: describeStatus(profile, data) }
+      prev?.text === aiText
+        ? prev
+        : {
+            text: aiText,
+            at: data.timestamp,
+            status: describeStatus(profile, data),
+          },
     );
   }, [aiText, data, profile]);
 
@@ -72,11 +84,20 @@ export default function App() {
           <>
             <div className="columns">
               <div className="col-wide">
-                <ProcessOverview data={data} profile={profile} />
-                <TrendPanel history={history} profile={profile} />
+                <ProcessOverview
+                  data={data}
+                  profile={profile}
+                  history={history}
+                  onOpenTrend={setTrendTag}
+                />
               </div>
               <div className="col-side">
-                <AlarmPanel data={data} alarms={alarms} threshold={threshold} diagnosis={diagnosis} />
+                <AlarmPanel
+                  data={data}
+                  alarms={alarms}
+                  threshold={threshold}
+                  diagnosis={diagnosis}
+                />
                 <ControlPanel
                   onCommand={sendCommand}
                   motorEnabled={data ? Boolean(data.motor_enable) : null}
@@ -86,7 +107,9 @@ export default function App() {
             </div>
             <EventLog
               deviceId={deviceId}
-              isAnomaly={Boolean(data?.anomaly?.is_anomaly || data?.anomaly?.rule_alarm)}
+              isAnomaly={Boolean(
+                data?.anomaly?.is_anomaly || data?.anomaly?.rule_alarm,
+              )}
               profile={profile}
             />
           </>
@@ -103,6 +126,13 @@ export default function App() {
           />
         )}
       </main>
+
+      <TrendDialog
+        tag={trendTag}
+        history={history}
+        profile={profile}
+        onClose={() => setTrendTag(null)}
+      />
     </>
   );
 }
