@@ -55,9 +55,9 @@ export function evaluate(spec: TagSpec, value: number): Level {
   return "normal";
 }
 
-/** S7-1511T-MOCK → S7-1511T（規格與手冊只跟設備型號有關） */
+/** S7-1511T-MOCK、S7-1511T-SIM → S7-1511T（規格與手冊只跟設備型號有關） */
 export function baseDeviceId(deviceId: string): string {
-  return deviceId.replace(/-MOCK$/, "");
+  return deviceId.replace(/-(MOCK|SIM)$/, "");
 }
 
 export function useDeviceProfile(deviceId: string) {

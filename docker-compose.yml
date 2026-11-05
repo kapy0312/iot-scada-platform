@@ -10,6 +10,9 @@ services:
       QDRANT_URL: http://host.docker.internal:6343
       OLLAMA_URL: http://100.89.23.28:11434
       PLC_SOURCE: mock
+      PLC_URL: opc.tcp://192.168.0.10:4840
+      # 接 PLCSIM 時用 -SIM，模擬資料不會進入訓練集；之後接實機要改回 S7-1511T
+      OPCUA_DEVICE_ID: S7-1511T-SIM
 
   frontend:
     build: ./frontend

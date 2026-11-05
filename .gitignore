@@ -21,3 +21,6 @@ backend/models/
 document/
 
 repomix-*.xml
+
+# PLC 專案本體（二進位、會自動產生 backup），原始碼請放 plc/
+plc-projects/

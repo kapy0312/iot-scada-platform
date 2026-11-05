@@ -41,7 +41,7 @@ server = MCPServer(
     name="iot-scada",
     instructions=(
         "這是 IIoT SCADA 平台的唯讀查詢工具，時間一律使用台灣時間（Asia/Taipei）。\n"
-        "device_id：S7-1511T 是真實 PLC 資料，S7-1511T-MOCK 是模擬資料，兩者共用同一份手冊。\n"
+        "device_id：S7-1511T 是真實 PLC，S7-1511T-MOCK 是後端內建模擬，S7-1511T-SIM 是 PLCSIM 模擬，三者共用同一份手冊。\n"
         "分析異常的建議順序：\n"
         "1. list_anomalies 找出事件與時間\n"
         "2. get_trend 看事件前後的趨勢（例如前後各 30 分鐘），判斷哪個訊號先變化\n"
@@ -312,7 +312,7 @@ async def get_device_info(device_id: str = "S7-1511T") -> dict:
 
     return {
         "device_id": device_id,
-        "data_source": "模擬資料" if device_id.endswith("-MOCK") else "真實 PLC",
+        "data_source": "後端內建模擬" if device_id.endswith("-MOCK") else "PLCSIM 模擬" if device_id.endswith("-SIM") else "真實 PLC",
         "profile": profile or f"沒有 {manual_device} 的規格資料，已知設備：{list(DEVICE_PROFILES)}",
         "anomaly_rule": f"Isolation Forest 分數低於 {ANOMALY_THRESHOLD} 判定異常（分數越低越異常）",
         "devices_in_db_last_30_days": [

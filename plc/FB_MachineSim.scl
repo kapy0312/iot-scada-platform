@@ -1,0 +1,109 @@
+﻿FUNCTION_BLOCK "FB_MachineSim"
+TITLE = Motor and pump machine simulation for PLCSIM
+{ S7_Optimized_Access := 'TRUE' }
+AUTHOR : Kevin
+VERSION : 0.1
+// 模擬「馬達帶動泵浦」的機台，讓 PLCSIM 的數值會隨啟停、設定值與故障模式變化
+// 由 OB30（循環中斷 100 ms）呼叫
+
+   VAR_INPUT
+      Enable : Bool;             // 馬達啟動（DB1.motor_enable）
+      Setpoint : Real;           // 轉速設定值 RPM（DB1.speed_setpoint）
+      FaultMode : Int;           // 0=正常 1=下游阻塞背壓過高 2=冷卻風扇故障 3=負載突然降低
+      CycleTime : Real := 0.1;   // 呼叫週期（秒），要跟 OB30 的循環時間一致
+   END_VAR
+
+   VAR_OUTPUT
+      Speed : Real;              // 馬達轉速 RPM
+      Temperature : Real;        // 溫度 °C
+      Pressure : Real;           // 壓力 bar
+   END_VAR
+
+   VAR
+      statSpeed : Real := 0.0;
+      statTemp : Real := 25.0;
+      statPress : Real := 0.3;
+      seed : UDInt := 12345;
+   END_VAR
+
+   VAR_TEMP
+      speedTarget : Real;
+      tempTarget : Real;
+      pressTarget : Real;
+      ratio : Real;
+      n1 : Real;
+      n2 : Real;
+      n3 : Real;
+   END_VAR
+
+   VAR CONSTANT
+      AMBIENT : Real := 25.0;        // 環境溫度
+      RATED_SPEED : Real := 1480.0;  // 額定轉速
+      MAX_SPEED : Real := 1900.0;
+      TAU_SPEED : Real := 3.0;       // 轉速時間常數（秒）：約 3 秒反應
+      TAU_PRESS : Real := 2.0;       // 壓力跟著轉速走，反應快
+      TAU_TEMP : Real := 20.0;       // 溫度有熱慣性，反應慢
+   END_VAR
+
+
+BEGIN
+	// ---------- 1. 轉速：一階延遲追設定值 ----------
+	IF #Enable THEN
+	    #speedTarget := LIMIT(MN := 0.0, IN := #Setpoint, MX := #MAX_SPEED);
+	ELSE
+	    #speedTarget := 0.0;
+	END_IF;
+
+	IF #FaultMode = 3 THEN
+	    // 負載突然降低：轉速失控上升（手冊 2.1／5.1）
+	    #speedTarget := #speedTarget * 1.2;
+	END_IF;
+
+	#statSpeed := #statSpeed + (#speedTarget - #statSpeed) * #CycleTime / #TAU_SPEED;
+	#ratio := #statSpeed / #RATED_SPEED;
+
+	// ---------- 2. 壓力：泵浦特性，壓力約與轉速平方成正比 ----------
+	#pressTarget := 0.3 + 4.8 * #ratio * #ratio;     // 額定轉速時約 5.1 bar
+	CASE #FaultMode OF
+	    1:  // 下游管路或閥門阻塞，背壓過高（手冊 4.1／5.2）
+	        #pressTarget := #pressTarget * 1.6;
+	    3:  // 負載降低，壓力反而正常偏低（手冊 5.1）
+	        #pressTarget := #pressTarget * 0.7;
+	END_CASE;
+	#statPress := #statPress + (#pressTarget - #statPress) * #CycleTime / #TAU_PRESS;
+
+	// ---------- 3. 溫度：隨負載上升，熱慣性較慢 ----------
+	#tempTarget := #AMBIENT + 45.0 * #ratio;           // 額定轉速時約 70 °C
+	CASE #FaultMode OF
+	    1:  // 背壓讓馬達負荷增加
+	        #tempTarget := #tempTarget + 20.0;
+	    2:  // 冷卻風扇故障或風道堵塞（手冊 3.1）
+	        #tempTarget := #tempTarget + 35.0;
+	    3:  // 高速摩擦生熱
+	        #tempTarget := #tempTarget + 15.0;
+	END_CASE;
+	#statTemp := #statTemp + (#tempTarget - #statTemp) * #CycleTime / #TAU_TEMP;
+
+	// ---------- 4. 雜訊：簡單亂數，讓數值像真實感測器 ----------
+	#seed := (#seed * UDINT#75 + UDINT#74) MOD UDINT#65537;
+	#n1 := UDINT_TO_REAL(#seed MOD UDINT#2001) / 1000.0 - 1.0;
+	#seed := (#seed * UDINT#75 + UDINT#74) MOD UDINT#65537;
+	#n2 := UDINT_TO_REAL(#seed MOD UDINT#2001) / 1000.0 - 1.0;
+	#seed := (#seed * UDINT#75 + UDINT#74) MOD UDINT#65537;
+	#n3 := UDINT_TO_REAL(#seed MOD UDINT#2001) / 1000.0 - 1.0;
+
+	#Speed := MAX(IN1 := 0.0, IN2 := #statSpeed + #n1 * 4.0);
+	#Temperature := #statTemp + #n2 * 0.3;
+	#Pressure := MAX(IN1 := 0.0, IN2 := #statPress + #n3 * 0.05);
+
+END_FUNCTION_BLOCK
+
+DATA_BLOCK "MachineSim_DB"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+NON_RETAIN
+"FB_MachineSim"
+
+BEGIN
+
+END_DATA_BLOCK

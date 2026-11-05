@@ -14,10 +14,12 @@ _last_ollama_call = 0.0
 OLLAMA_COOLDOWN   = 60.0
 _latest_ai_analysis: str = ""
 
-PLC_URL = "opc.tcp://192.168.0.10:4840"
+PLC_URL = os.getenv("PLC_URL", "opc.tcp://192.168.0.10:4840")
 NS      = 3
 
 VALID_SOURCES = ("opcua", "mock")
+# OPC UA 來源寫入用的 device_id：接實機用 S7-1511T（預設）；接 PLCSIM 時設成 S7-1511T-SIM，避免模擬資料進入訓練集
+OPCUA_DEVICE_ID: str = os.getenv("OPCUA_DEVICE_ID", "S7-1511T")
 current_source: str = os.getenv("PLC_SOURCE", "opcua")
 if current_source not in VALID_SOURCES:
     current_source = "opcua"
@@ -31,8 +33,8 @@ _anomaly_override: dict | None = None
 _anomaly_deadline: float = 0.0
 
 def get_active_device_id() -> str:
-    """依目前資料源回傳寫入用的 device_id，mock 資料獨立標記，避免污染訓練集"""
-    return "S7-1511T-MOCK" if current_source == "mock" else "S7-1511T"
+    """依目前資料源回傳寫入用的 device_id；mock 與 PLCSIM 的資料獨立標記，避免污染訓練集"""
+    return "S7-1511T-MOCK" if current_source == "mock" else OPCUA_DEVICE_ID
 
 def trigger_mock_anomaly(duration_seconds: float = 20.0):
     """讓 mock 資料源在指定秒數內朝異常值靠攏，僅限 mock 來源可用"""

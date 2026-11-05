@@ -98,7 +98,7 @@ button, input { font: inherit; color: inherit; }
 .tab[aria-selected="true"] { color: var(--text); font-weight: 700; border-bottom-color: var(--text); }
 
 /* ---------- 版面 ---------- */
-.main { max-width: 1440px; margin: 0 auto; padding: 16px 20px 32px; display: flex; flex-direction: column; gap: 16px; }
+.main { max-width: 1920px; margin: 0 auto; padding: 16px 20px 32px; display: flex; flex-direction: column; gap: 16px; }
 .columns { display: flex; flex-wrap: wrap; gap: 16px; }
 .col-wide { flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 .col-side { flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
