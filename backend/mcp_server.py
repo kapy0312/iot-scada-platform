@@ -32,9 +32,7 @@ DATABASE_URL = os.getenv(
     "postgresql://postgres:iotscada123@localhost:5435/iotscada"
 )
 LOCAL_TZ = ZoneInfo("Asia/Taipei")
-INCIDENT_GAP_SECONDS = 60   # 兩筆異常紀錄間隔超過 60 秒，視為不同次事件
 MAX_TREND_POINTS = 240      # 趨勢最多回傳幾個時間點，避免塞爆對話
-LEGACY_COLUMNS = ("motor_speed", "temperature", "pressure")
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 
@@ -44,7 +42,7 @@ server = MCPServer(
         "這是 IIoT SCADA 平台的唯讀查詢工具，時間一律使用台灣時間（Asia/Taipei）。\n"
         "device_id：S7-1511T 是真實 PLC，S7-1511T-MOCK 是後端內建模擬，S7-1511T-SIM 是 PLCSIM 模擬，三者共用同一份手冊。\n"
         "分析異常的建議順序：\n"
-        "1. list_anomalies 找出事件與時間\n"
+        "1. list_anomalies 找出事件與時間（每個事件附 AI 診斷與它依據的手冊章節、頁碼）\n"
         "2. get_trend 看事件前後的趨勢（例如前後各 30 分鐘），判斷哪個訊號先變化\n"
         "3. get_device_info 對照正常範圍、警戒值、危險值\n"
         "4. search_manual 依現象查手冊，回答時引用手冊的章節與頁碼\n"
@@ -114,58 +112,60 @@ async def _embed(text: str) -> list[float]:
         ) from e
 
 
-def _group_incidents(rows: list) -> list[dict]:
-    """把每秒一筆的異常紀錄，依時間間隔合併成「一次事件」"""
-    incidents: list[dict] = []
-    current: list = []
-    for r in rows:
-        if current and (r["device_id"] != current[-1]["device_id"]
-                        or (r["time"] - current[-1]["time"]).total_seconds() > INCIDENT_GAP_SECONDS):
-            incidents.append(_summarize(current))
-            current = []
-        current.append(r)
-    if current:
-        incidents.append(_summarize(current))
-    return incidents
+INCIDENT_LEVEL_TEXT = {
+    "danger": "危險", "warning": "警戒", "high": "偏高", "low": "偏低", "normal": "只有 ML 異常（訊號都在正常範圍）",
+}
 
 
-def _readings(row) -> dict:
-    """新紀錄用 readings（JSONB，所有訊號）；舊紀錄沒有 readings 時用三個舊欄位"""
-    raw = row["readings"]
-    if raw:
-        return json.loads(raw) if isinstance(raw, str) else dict(raw)
-    return {c: row[c] for c in LEGACY_COLUMNS if row[c] is not None}
+def _json_field(v):
+    """asyncpg 預設把 jsonb 讀成字串"""
+    if v is None:
+        return None
+    return json.loads(v) if isinstance(v, str) else v
 
 
-def _summarize(rows: list) -> dict:
-    readings = [_readings(r) for r in rows]
-    profile = get_profile(rows[0]["device_id"]) or {"tags": {}}
-    tags = list(profile["tags"]) or sorted({k for rd in readings for k in rd})
+def _incident_view(r) -> dict:
+    """事件表（anomaly_incidents）的一列 → 給 Claude 看的格式"""
+    profile = get_profile(r["device_id"]) or {"tags": {}}
+    peak = _json_field(r["peak"]) or {}
+    pmax, pmin = peak.get("max", {}), peak.get("min", {})
+    tags = list(profile["tags"]) or sorted(set(pmax) | set(pmin))
     signals = {}
     for tag in tags:
-        vals = [rd[tag] for rd in readings if rd.get(tag) is not None]
-        if not vals:
+        hi, lo = pmax.get(tag), pmin.get(tag)
+        if hi is None and lo is None:
             continue
-        info = {"max": _round(max(vals)), "min": _round(min(vals))}
+        info = {"max": _round(hi), "min": _round(lo)}
         spec = profile["tags"].get(tag)
         if spec:
             info["label"] = spec["label"]
             info["unit"] = spec["unit"]
-            info["peak_level"] = LEVEL_TEXT[evaluate(spec, max(vals))]
+            # 偏高的看最大值、偏低的看最小值，取比較嚴重的那一個
+            levels = [evaluate(spec, v) for v in (hi, lo) if v is not None]
+            order = ["normal", "low", "high", "warning", "danger"]
+            info["peak_level"] = LEVEL_TEXT[max(levels, key=order.index)]
         signals[tag] = info
 
-    analyses = [r["ai_analysis"] for r in rows if r["ai_analysis"]]
+    src = _json_field(r["ai_source"])
     return {
-        "device_id": rows[0]["device_id"],
-        "start": _fmt(rows[0]["time"]),
-        "end": _fmt(rows[-1]["time"]),
-        "duration_seconds": int((rows[-1]["time"] - rows[0]["time"]).total_seconds()) + 1,
-        "records": len(rows),
-        "lowest_anomaly_score": _round(min(r["anomaly_score"] for r in rows if r["anomaly_score"] is not None), 4)
-            if any(r["anomaly_score"] is not None for r in rows) else None,
+        "incident_id": r["id"],
+        "device_id": r["device_id"],
+        "start": _fmt(r["started_at"]),
+        "end": _fmt(r["ended_at"]),
+        "duration_seconds": int((r["ended_at"] - r["started_at"]).total_seconds()) + 1,
+        "records": r["records"],
+        "level": INCIDENT_LEVEL_TEXT.get(r["level"], r["level"]),
+        "lowest_anomaly_score": _round(r["min_score"], 4),
         "signals": signals,
-        # 事件開頭幾秒可能還掛著上一次的診斷，取最後一筆較可靠
-        "ai_analysis": analyses[-1] if analyses else None,
+        # 事件中最嚴重時刻的 AI 診斷，以及它依據的手冊章節（由後端依訊號條件選定）
+        "ai_analysis": r["ai_analysis"],
+        "manual_source": {
+            "label": src.get("label"),
+            "file": src.get("file"),
+            "section": src.get("section"),
+            "page": src.get("page"),
+            "match": {"full": "條件完全符合", "partial": "部分符合", "reference": "參考章節"}.get(src.get("match_type")),
+        } if src else None,
     }
 
 
@@ -179,27 +179,29 @@ async def list_anomalies(
     hours: int = 24,
 ) -> dict:
     """
-    列出指定時段內的異常事件（連續的異常紀錄已合併成一次事件）。
+    列出指定時段內的異常事件（一次故障一筆，由後端即時維護）。
 
     參數：
-    - device_id：S7-1511T（真實）或 S7-1511T-MOCK（模擬）；不填則查全部設備
+    - device_id：S7-1511T（真實）、S7-1511T-MOCK（內建模擬）或 S7-1511T-SIM（PLCSIM）；不填則查全部設備
     - start / end：台灣時間，例如 "2026-11-04 08:00"；不填 end 就是現在
     - hours：只填 end 或都不填時，往前查幾小時（預設 24）
 
-    每個事件含：起訖時間、持續秒數、最低異常分數（越低越異常，低於 0.05 判定異常）、
-    每個訊號的最高與最低值（含峰值對照手冊規格的判定）、當時 AI 的兩行診斷。
+    每個事件含：起訖時間、持續秒數、等級、最低異常分數（越低越異常，門檻依模型而定）、
+    每個訊號的最高與最低值（含對照手冊規格的判定）、事件中最嚴重時刻的 AI 診斷，
+    以及該診斷依據的手冊章節與頁碼（manual_source）。
     """
     start_dt, end_dt = _time_range(start, end, hours)
     sql = """
-        SELECT time, device_id, anomaly_score, motor_speed, temperature, pressure, ai_analysis, readings
-        FROM anomaly_events
-        WHERE time >= $1 AND time < $2
+        SELECT id, device_id, started_at, ended_at, records, level, severity,
+               peak, min_score, ai_analysis, ai_source
+        FROM anomaly_incidents
+        WHERE started_at < $2 AND ended_at >= $1
     """
     args: list = [start_dt, end_dt]
     if device_id:
         sql += " AND device_id = $3"
         args.append(device_id)
-    sql += " ORDER BY device_id, time"
+    sql += " ORDER BY started_at DESC LIMIT 21"
 
     conn = await _connect_db()
     try:
@@ -207,13 +209,12 @@ async def list_anomalies(
     finally:
         await conn.close()
 
-    incidents = _group_incidents(rows)
-    incidents.sort(key=lambda x: x["start"], reverse=True)
+    incidents = [_incident_view(r) for r in rows[:20]]
     return {
         "range": {"start": _fmt(start_dt), "end": _fmt(end_dt), "timezone": "Asia/Taipei"},
         "incident_count": len(incidents),
-        "incidents": incidents[:20],
-        "note": "只列出最近 20 次" if len(incidents) > 20 else None,
+        "incidents": incidents,
+        "note": "只列出最近 20 次，要看更早的請縮小時間範圍" if len(rows) > 20 else None,
     }
 
 

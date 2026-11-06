@@ -107,15 +107,54 @@ export async function getAnomalyEvents(deviceId: string, hours: number): Promise
   return (data.events ?? []) as AnomalyEvent[];
 }
 
-/**
- * 從 AI 診斷文字裡找出引用的手冊章節
- * 「依設備手冊5.2檢查」→ 手冊 §5.2；「手冊3 4.1」→ 手冊3 §4.1；「手冊§7」→ 手冊 §7
- */
-export function extractManualRefs(text: string | null | undefined): string[] {
-  if (!text) return [];
-  const found = new Set<string>();
-  const re = /手冊(?:\s*(\d)(?=\s*(?:的|第)?\s*§?\s*\d+\.\d+))?\s*(?:的|第)?\s*§?\s*(\d+(?:\.\d+)?)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) found.add(`手冊${m[1] ?? ""} §${m[2]}`);
-  return [...found];
+/** AI 診斷依據的手冊章節（後端選定，不再從診斷文字裡用 regex 猜） */
+export interface ManualSource {
+  label: string;                      // 例：測試版3 §4.2
+  file?: string | null;
+  doc_title?: string | null;
+  section?: string;                   // 完整章節路徑
+  section_no?: string;
+  page?: number | null;
+  match_type?: "full" | "partial" | "reference";
+  match?: number;                     // 章節條件符合項數
+  contra?: number;                    // 章節條件矛盾項數
+}
+
+const MATCH_TEXT: Record<string, string> = { partial: "部分符合", reference: "參考" };
+
+/** 「測試版3 §4.2 · p.3」，部分符合或參考章節會加註 */
+export function sourceText(s: ManualSource): string {
+  const page = typeof s.page === "number" ? ` · p.${s.page}` : "";
+  const note = s.match_type && MATCH_TEXT[s.match_type] ? `（${MATCH_TEXT[s.match_type]}）` : "";
+  return `${s.label}${page}${note}`;
+}
+
+/** 滑鼠移上去顯示的完整來源 */
+export function sourceTitle(s: ManualSource): string {
+  return [s.file, s.section].filter(Boolean).join("\n");
+}
+
+/** 事件（一次故障一筆），由後端即時維護 */
+export interface Incident {
+  id: number;
+  device_id: string;
+  started_at: string;
+  ended_at: string;
+  duration_seconds: number;
+  records: number;
+  level: string;                      // normal（只有 ML 異常）/ low / high / warning / danger
+  severity: number;
+  peak: { max?: Record<string, number>; min?: Record<string, number> } | null;
+  min_score: number | null;
+  ai_analysis: string | null;
+  ai_source: ManualSource | null;
+}
+
+export async function getIncidents(deviceId: string, hours: number): Promise<Incident[]> {
+  const res = await fetch(
+    `${API_BASE}/api/incidents?device_id=${encodeURIComponent(deviceId)}&hours=${hours}`
+  );
+  if (!res.ok) throw new Error(String(res.status));
+  const data = await res.json();
+  return (data.incidents ?? []) as Incident[];
 }

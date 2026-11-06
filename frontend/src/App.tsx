@@ -48,6 +48,7 @@ export default function App() {
             text: aiText,
             at: data.timestamp,
             status: describeStatus(profile, data),
+            source: data.anomaly?.ai_source ?? null,
           },
     );
   }, [aiText, data, profile]);

@@ -1,13 +1,14 @@
 import type { PlcData } from "../hooks/useWebSocket";
 import type { Alarm } from "../hooks/useAlarms";
 import { LEVEL_TEXT, evaluate, getValue, tagKeys, type DeviceProfile } from "../deviceProfile";
-import { extractManualRefs } from "../api";
+import { sourceText, sourceTitle, type ManualSource } from "../api";
 import { DangerIcon, WarningIcon } from "./Icons";
 
 export interface Diagnosis {
   text: string;
   at: number; // unix 秒
   status: string; // 診斷當下依手冊判定的狀態
+  source: ManualSource | null; // 診斷依據的手冊章節（後端選定）
 }
 
 interface Props {
@@ -33,7 +34,6 @@ export default function AlarmPanel({ data, alarms, threshold, diagnosis }: Props
   const anomaly = data?.anomaly;
   const top = alarms[0]?.level;
   const panelClass = top === "danger" ? "panel alert-danger" : top === "warning" ? "panel alert" : "panel";
-  const refs = extractManualRefs(diagnosis?.text);
   const mlStatus =
     !anomaly ? "等待資料"
     : anomaly.status === "collecting_data" ? "收集資料中（需要 30 筆才開始判斷）"
@@ -86,11 +86,11 @@ export default function AlarmPanel({ data, alarms, threshold, diagnosis }: Props
             </span>
             <p style={{ margin: 0, whiteSpace: "pre-line" }}>{diagnosis.text}</p>
             <p className="small muted" style={{ margin: 0 }}>診斷當下依手冊判定：{diagnosis.status}</p>
-            {refs.length > 0 && (
+            {diagnosis.source && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-                {refs.map((r) => (
-                  <span key={r} className="ref-tag">{r}</span>
-                ))}
+                <span className="ref-tag" title={sourceTitle(diagnosis.source)}>
+                  {sourceText(diagnosis.source)}
+                </span>
               </div>
             )}
           </>

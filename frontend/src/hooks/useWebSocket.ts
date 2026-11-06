@@ -1,6 +1,6 @@
 // useWebSocket.ts
 import { useState, useEffect, useRef, useCallback } from "react";
-import { writeTag } from "../api";
+import { writeTag, type ManualSource } from "../api";
 
 export interface AnomalyResult {
   is_anomaly: boolean;
@@ -12,6 +12,8 @@ export interface AnomalyResult {
   rule_alarm?: boolean; // 任一訊號達警戒值或危險值
   note?: string;
   ai_analysis?: string;
+  ai_source?: ManualSource | null; // 診斷依據的手冊章節（後端選定）
+  incident_id?: number | null;     // 所屬事件；事件第一秒還沒寫進資料庫時是 null
 }
 
 export interface PlcData {
