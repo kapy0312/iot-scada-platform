@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.incidents import absorb, new_incident, severity_and_level
+from core.incidents import absorb, diagnosis_type, new_incident, severity_and_level
 from ml.ollama_analyzer import (
     compose_text, condition_states, condition_summary, make_source, parse_answer,
     rank_candidates, select_primary,
@@ -146,3 +146,16 @@ def test_absorb_tracks_peaks_both_directions():
     assert inc["min_score"] == pytest.approx(-0.15)
     assert inc["ended_at"] == t0 + timedelta(seconds=1)
     assert inc["level"] == "warning"
+
+
+# ---------- 診斷來源分類 ----------
+
+def test_診斷來源分類():
+    new_text = compose_text("軸承磨損", "更換軸承", {"label": "測試版3 §4.1", "match_type": "full"})
+    assert diagnosis_type(new_text, {"label": "測試版3 §4.1"}) == "verified"
+    assert diagnosis_type(compose_text("推論：x", "", None), None) == "no_manual"
+    # 實際舊資料（事件 22）：模型自己寫了依據，但沒有 ai_source
+    old = "原因：轉速低、溫度高（依據：測試版3 §4.2）\n處置：檢查負載端"
+    assert diagnosis_type(old, None) == "legacy"
+    assert diagnosis_type(None, None) == "none"
+    assert diagnosis_type("", None) == "none"

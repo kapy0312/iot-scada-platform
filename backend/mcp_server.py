@@ -25,6 +25,7 @@ from mcp.types import ToolAnnotations
 
 from core.config import get_database_url
 from core.device_profile import ANOMALY_THRESHOLD, DEVICE_PROFILES, LEVEL_TEXT, base_device_id, evaluate, get_profile
+from core.incidents import DIAGNOSIS_TYPES, diagnosis_type
 from rag.embedder import embed_text
 from rag.qdrant_client import list_documents, search as qdrant_search
 
@@ -156,6 +157,7 @@ def _incident_view(r) -> dict:
         "signals": signals,
         # 事件中最嚴重時刻的 AI 診斷，以及它依據的手冊章節（由後端依訊號條件選定）
         "ai_analysis": r["ai_analysis"],
+        "diagnosis_type": DIAGNOSIS_TYPES[diagnosis_type(r["ai_analysis"], src)],
         "manual_source": {
             "label": src.get("label"),
             "file": src.get("file"),
@@ -186,6 +188,10 @@ async def list_anomalies(
     每個事件含：起訖時間、持續秒數、等級、最低異常分數（越低越異常，門檻依模型而定）、
     每個訊號的最高與最低值（含對照手冊規格的判定）、事件中最嚴重時刻的 AI 診斷，
     以及該診斷依據的手冊章節與頁碼（manual_source）。
+
+    diagnosis_type 說明這份診斷可不可信：標示「舊版診斷」的事件，章節是模型自己寫的、
+    沒有 manual_source，可能挑錯章節或與讀值矛盾；分析時不要把它當成系統錯誤，
+    需要時用 search_manual 依讀值重新查手冊。
     """
     start_dt, end_dt = _time_range(start, end, hours)
     sql = """

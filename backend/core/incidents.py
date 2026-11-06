@@ -10,6 +10,27 @@ INCIDENT_GAP_SECONDS = 60   # 正常超過 60 秒後再異常，算新事件
 LEVEL_ORDER = ["normal", "low", "high", "warning", "danger"]
 
 
+# 診斷來源分類：讓讀資料的人（或 AI）分得出哪些診斷可信
+# - 新版（Phase 0 起）由程式依訊號條件選章節，章節記在 ai_source；找不到章節時文字固定寫「無對應章節」
+# - 舊版由模型自己寫「依據」，章節沒經過程式驗證，可能挑錯或編造
+DIAGNOSIS_TYPES = {
+    "verified": "程式依訊號條件選定手冊章節",
+    "no_manual": "新版診斷，手冊中沒有符合條件的章節",
+    "legacy": "舊版診斷：章節由模型自行引用，未經程式驗證，僅供參考",
+    "none": "沒有 AI 診斷（事件太短、或當時 AI 服務沒有回應）",
+}
+
+
+def diagnosis_type(ai_analysis, ai_source) -> str:
+    if not ai_analysis:
+        return "none"
+    if ai_source:
+        return "verified"
+    if "（依據：無對應章節）" in ai_analysis:
+        return "no_manual"
+    return "legacy"
+
+
 def _is_number(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
