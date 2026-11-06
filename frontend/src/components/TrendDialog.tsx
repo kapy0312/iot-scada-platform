@@ -41,6 +41,8 @@ const RANGES = [
 // 縱軸數字寬度、右側門檻標籤寬度；ML 異常條用同樣的左右留白，時間才會對齊
 const Y_AXIS_W = 56;
 const RIGHT_GUTTER = 76;
+const X_AXIS_H = 30; // Recharts XAxis 預設高度
+const MIN_LABEL_GAP = 14; // 兩條門檻線距離小於這個像素就把標籤上下錯開
 
 const fmtTime = (t: number) =>
   new Date(t * 1000).toLocaleTimeString("zh-TW", {
@@ -66,6 +68,28 @@ function anomalySegments(points: PlcData[]): Array<[number, number]> {
   }
   if (start !== null && prev !== null) segs.push([start, prev]);
   return segs;
+}
+
+/** 門檻線右側的標籤；Recharts 會傳入 viewBox（線段的位置），dy 用來把太近的兩個標籤錯開 */
+function EdgeLabel(props: {
+  viewBox?: { x: number; y: number; width: number };
+  text: string;
+  color: string;
+  dy?: number;
+}) {
+  const { viewBox, text, color, dy = 0 } = props;
+  if (!viewBox) return null;
+  return (
+    <text
+      x={viewBox.x + viewBox.width + 6}
+      y={viewBox.y + dy}
+      dominantBaseline="middle"
+      fill={color}
+      fontSize={11}
+    >
+      {text}
+    </text>
+  );
 }
 
 function TagLabel({
@@ -120,13 +144,26 @@ function TagChart({
   const showWarn = spec.warning >= lo && spec.warning <= hi;
   const showDanger = spec.danger >= lo && spec.danger <= hi;
   const axDec = Math.max(0, spec.decimals - 1);
+
+  // 下方留白：有時間軸時由時間軸撐開，沒有時要留 10px，縱軸下限數字才不會被切掉
+  const marginTop = 8;
+  const marginBottom = showX ? 2 : 10;
+  const plotH = height - marginTop - marginBottom - (showX ? X_AXIS_H : 0);
+  const gapPx = ((spec.danger - spec.warning) / (hi - lo || 1)) * plotH;
+  const tooClose = showWarn && showDanger && gapPx < MIN_LABEL_GAP;
+
   return (
     <div role="img" aria-label={`${spec.label} 趨勢`}>
       <ResponsiveContainer width="100%" height={height}>
         <LineChart
           data={points}
           syncId="trend-detail"
-          margin={{ top: 8, right: RIGHT_GUTTER, left: 0, bottom: 2 }}
+          margin={{
+            top: marginTop,
+            right: RIGHT_GUTTER,
+            left: 0,
+            bottom: marginBottom,
+          }}
         >
           <XAxis
             dataKey="timestamp"
@@ -171,12 +208,13 @@ function TagChart({
               stroke="var(--warn-mark)"
               strokeDasharray="6 4"
               ifOverflow="hidden"
-              label={{
-                value: `警戒 ${spec.warning}`,
-                position: "right",
-                fill: "var(--warn-mark)",
-                fontSize: 11,
-              }}
+              label={
+                <EdgeLabel
+                  text={`警戒 ${spec.warning}`}
+                  color="var(--warn-mark)"
+                  dy={tooClose ? 6 : 0}
+                />
+              }
             />
           )}
           {showDanger && (
@@ -185,12 +223,13 @@ function TagChart({
               stroke="var(--danger-mark)"
               strokeDasharray="2 3"
               ifOverflow="hidden"
-              label={{
-                value: `危險 ${spec.danger}`,
-                position: "right",
-                fill: "var(--danger-mark)",
-                fontSize: 11,
-              }}
+              label={
+                <EdgeLabel
+                  text={`危險 ${spec.danger}`}
+                  color="var(--danger-mark)"
+                  dy={tooClose ? -6 : 0}
+                />
+              }
             />
           )}
           <Tooltip
@@ -378,7 +417,7 @@ export default function TrendDialog({ tag, history, profile, onClose }: Props) {
                     tag={k}
                     points={points}
                     domain={domain}
-                    height={i === others.length - 1 ? 92 : 68}
+                    height={i === others.length - 1 ? 100 : 76}
                     scale={scale}
                     showX={i === others.length - 1}
                   />
