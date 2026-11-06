@@ -3,7 +3,8 @@ services:
     image: timescale/timescaledb:latest-pg16
     container_name: timescaledb
     environment:
-      POSTGRES_PASSWORD: iotscada123
+      # 只在資料庫第一次建立時生效；之後要換密碼請用 ALTER USER（見 README「設定 .env」）
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       POSTGRES_DB: iotscada
     ports:
       - "5435:5432"
@@ -27,7 +28,7 @@ services:
       - timescaledb
       - qdrant
     environment:
-      DATABASE_URL: postgresql://postgres:iotscada123@timescaledb:5432/iotscada
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}@timescaledb:5432/iotscada
       QDRANT_URL: http://qdrant:6333
 
   frontend:

@@ -6,13 +6,11 @@ import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 
-import asyncpg
-
 from core.device_profile import get_tags
+from db.pool import acquire
 from ml.model_store import list_models
 from ml.train import train
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:iotscada123@localhost:5435/iotscada")
 DEVICE_ID = os.getenv("AUTO_TRAIN_DEVICE_ID", "S7-1511T")
 MIN_ROWS = 5000            # 最近 30 天每個訊號至少要有這麼多筆
 TRAIN_DAYS = 30
@@ -20,15 +18,12 @@ RETRAIN_DAYS = 1
 
 
 async def count_rows_per_tag(tags: list[str]) -> dict[str, int]:
-    conn = await asyncpg.connect(DATABASE_URL)
-    try:
+    async with acquire() as conn:
         rows = await conn.fetch("""
             SELECT tag_name, COUNT(*) AS n FROM plc_measurements
             WHERE device_id = $1 AND time > NOW() - INTERVAL '30 days' AND tag_name = ANY($2::text[])
             GROUP BY tag_name
         """, DEVICE_ID, tags)
-    finally:
-        await conn.close()
     counts = {r["tag_name"]: r["n"] for r in rows}
     return {t: counts.get(t, 0) for t in tags}
 

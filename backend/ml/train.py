@@ -13,10 +13,8 @@
 """
 import argparse
 import asyncio
-import os
 from datetime import datetime, timedelta, timezone
 
-import asyncpg
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
@@ -24,10 +22,10 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from core.device_profile import get_tags
+from db.pool import acquire, close_pool
 from ml.features import WINDOW, build_training_features
 from ml.model_store import save_model
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:iotscada123@localhost:5435/iotscada")
 MIN_SAMPLES = 600          # 至少 10 分鐘的有效特徵列（建議 60 分鐘以上，誤報較少）
 THRESHOLD_QUANTILE = 0.001 # 門檻＝訓練資料中最低的 0.1% 分數；正常資料幾乎不會低於它
 EXCLUDE_MARGIN = timedelta(minutes=2)
@@ -35,8 +33,7 @@ EXCLUDE_MARGIN = timedelta(minutes=2)
 
 async def load_wide(device_id: str, since: datetime, tags: list[str]) -> pd.DataFrame:
     """長表格 → 寬表格；時間取到秒，避免同一秒的訊號因毫秒差異被拆成兩列"""
-    conn = await asyncpg.connect(DATABASE_URL)
-    try:
+    async with acquire() as conn:
         rows = await conn.fetch("""
             SELECT date_trunc('second', time) AS t, tag_name, AVG(value) AS value
             FROM plc_measurements
@@ -44,8 +41,6 @@ async def load_wide(device_id: str, since: datetime, tags: list[str]) -> pd.Data
             GROUP BY t, tag_name
             ORDER BY t
         """, device_id, since, tags)
-    finally:
-        await conn.close()
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows, columns=["time", "tag_name", "value"])
@@ -55,13 +50,10 @@ async def load_wide(device_id: str, since: datetime, tags: list[str]) -> pd.Data
 
 
 async def load_anomaly_windows(device_id: str, since: datetime) -> list[tuple[datetime, datetime]]:
-    conn = await asyncpg.connect(DATABASE_URL)
-    try:
+    async with acquire() as conn:
         rows = await conn.fetch(
             "SELECT time FROM anomaly_events WHERE device_id = $1 AND time >= $2 ORDER BY time",
             device_id, since)
-    finally:
-        await conn.close()
     return [(r["time"] - EXCLUDE_MARGIN, r["time"] + EXCLUDE_MARGIN) for r in rows]
 
 
@@ -130,7 +122,14 @@ def main():
 
     delta = timedelta(minutes=args.minutes) if args.minutes else timedelta(days=args.days)
     since = datetime.now(timezone.utc) - delta
-    asyncio.run(train(args.device, since, args.keep_anomalies))
+    asyncio.run(_run_cli(args.device, since, args.keep_anomalies))
+
+
+async def _run_cli(device_id: str, since: datetime, keep_anomalies: bool):
+    try:
+        await train(device_id, since, keep_anomalies)
+    finally:
+        await close_pool()
 
 
 if __name__ == "__main__":

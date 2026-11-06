@@ -12,17 +12,13 @@
 import argparse
 import asyncio
 import json
-import os
 
 import asyncpg
 
+from core.config import get_database_url
 from core.device_profile import get_profile
 from core.incidents import INCIDENT_GAP_SECONDS as GAP_SECONDS, LEVEL_ORDER, severity_and_level
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:iotscada123@localhost:5435/iotscada"
-)
 
 LEGACY_COLUMNS = ("motor_speed", "temperature", "pressure")
 
@@ -87,7 +83,7 @@ def summarize(group: list) -> dict:
 
 
 async def main(force: bool):
-    conn = await asyncpg.connect(DATABASE_URL)
+    conn = await asyncpg.connect(get_database_url())
     try:
         existing = await conn.fetchval("SELECT count(*) FROM anomaly_incidents")
         if existing and not force:

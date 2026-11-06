@@ -1,13 +1,8 @@
 import json
-import os
 
-import asyncpg
 from fastapi import APIRouter, Query
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:iotscada123@localhost:5435/iotscada"
-)
+from db.pool import acquire
 
 LEGACY_COLUMNS = ("motor_speed", "temperature", "pressure")
 
@@ -29,8 +24,7 @@ async def get_history(
     hours: int = Query(default=1, ge=1, le=168),  # 最多查 7 天
 ):
     """查詢指定 tag 的歷史資料"""
-    conn = await asyncpg.connect(DATABASE_URL)
-    try:
+    async with acquire() as conn:
         rows = await conn.fetch("""
             SELECT time, value
             FROM plc_measurements
@@ -39,8 +33,6 @@ async def get_history(
               AND time > NOW() - ($3 || ' hours')::INTERVAL
             ORDER BY time ASC
         """, device_id, tag, str(hours))
-    finally:
-        await conn.close()
 
     return {
         "device_id": device_id,
@@ -57,8 +49,7 @@ async def get_anomaly_events(
     hours: int = Query(default=24, ge=1, le=720),  # 最多查 30 天
 ):
     """查詢異常事件記錄；每筆含 readings（所有訊號），並保留舊的三個欄位"""
-    conn = await asyncpg.connect(DATABASE_URL)
-    try:
+    async with acquire() as conn:
         rows = await conn.fetch("""
             SELECT time, anomaly_score, motor_speed, temperature, pressure, ai_analysis, readings
             FROM anomaly_events
@@ -66,8 +57,6 @@ async def get_anomaly_events(
               AND time > NOW() - ($2 || ' hours')::INTERVAL
             ORDER BY time DESC
         """, device_id, str(hours))
-    finally:
-        await conn.close()
 
     events = []
     for row in rows:
@@ -96,8 +85,7 @@ async def get_incidents(
     limit: int = Query(default=200, ge=1, le=1000),
 ):
     """查詢事件（一次故障一筆）：起訖時間、等級、峰值、最嚴重時刻的診斷與手冊來源"""
-    conn = await asyncpg.connect(DATABASE_URL)
-    try:
+    async with acquire() as conn:
         rows = await conn.fetch("""
             SELECT id, device_id, started_at, ended_at, records, level, severity,
                    peak, min_score, ai_analysis, ai_source
@@ -107,8 +95,6 @@ async def get_incidents(
             ORDER BY started_at DESC
             LIMIT $3
         """, device_id, str(hours), limit)
-    finally:
-        await conn.close()
 
     incidents = [{
         "id": r["id"],

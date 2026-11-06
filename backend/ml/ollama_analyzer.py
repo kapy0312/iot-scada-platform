@@ -2,19 +2,15 @@ import json
 import os
 import re
 
-import asyncpg
 import httpx
 
 from rag.embedder import embed_text
 from rag.qdrant_client import search as qdrant_search
 from core.device_profile import LEVEL_TEXT, base_device_id, evaluate, get_profile
+from db.pool import acquire
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://100.89.23.28:11434")
 OLLAMA_MODEL = "qwen3:14b"
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:iotscada123@localhost:5435/iotscada"
-)
 
 RAG_CANDIDATES = 12    # 向量檢索先多撈一些，再用章節條件重新排序
 
@@ -249,8 +245,7 @@ def select_primary(ranked: list[dict]) -> tuple[dict | None, str | None]:
 async def get_recent_trend(device_id: str) -> dict:
     """從 TimescaleDB 查詢最近 5 分鐘的趨勢統計"""
     try:
-        conn = await asyncpg.connect(DATABASE_URL)
-        try:
+        async with acquire() as conn:
             rows = await conn.fetch("""
                 SELECT
                     tag_name,
@@ -263,8 +258,6 @@ async def get_recent_trend(device_id: str) -> dict:
                   AND time > NOW() - INTERVAL '5 minutes'
                 GROUP BY tag_name
             """, device_id)
-        finally:
-            await conn.close()
         return {row["tag_name"]: dict(row) for row in rows}
     except Exception:
         return {}

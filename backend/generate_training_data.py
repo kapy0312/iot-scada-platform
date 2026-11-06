@@ -1,13 +1,14 @@
 import asyncio
 import asyncpg
+
+from core.config import get_database_url
 import random
 import math
 from datetime import datetime, timezone, timedelta
 
-DATABASE_URL = "postgresql://postgres:iotscada123@localhost:5435/iotscada"
 
 async def generate():
-    conn = await asyncpg.connect(DATABASE_URL)
+    conn = await asyncpg.connect(get_database_url())
 
     print("開始產生訓練資料...")
 

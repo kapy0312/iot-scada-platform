@@ -1,14 +1,8 @@
 import asyncio
 import json
-import os
 from datetime import datetime
 
-import asyncpg
-
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:iotscada123@localhost:5435/iotscada"
-)
+from db.pool import acquire
 
 # 同一事件的新增與更新必須依序執行：第一筆還沒拿到 id 前，第二筆不能又新增一次
 _lock = asyncio.Lock()
@@ -50,8 +44,7 @@ async def record_anomaly(device_id: str, values: dict, anomaly: dict, incident: 
     """
     async with _lock:
         try:
-            conn = await asyncpg.connect(DATABASE_URL)
-            try:
+            async with acquire() as conn:
                 await _upsert_incident(conn, incident)
                 await conn.execute("""
                     INSERT INTO anomaly_events
@@ -70,8 +63,6 @@ async def record_anomaly(device_id: str, values: dict, anomaly: dict, incident: 
                     _json(anomaly.get("ai_source")),
                     incident["id"],
                 )
-            finally:
-                await conn.close()
         except Exception as e:
             print(f"[ANOMALY] 寫入失敗：{e}")
 
@@ -80,10 +71,7 @@ async def save_incident(incident: dict):
     """診斷完成時呼叫：事件可能已經沒有新的異常秒了，要主動寫回診斷"""
     async with _lock:
         try:
-            conn = await asyncpg.connect(DATABASE_URL)
-            try:
+            async with acquire() as conn:
                 await _upsert_incident(conn, incident)
-            finally:
-                await conn.close()
         except Exception as e:
             print(f"[ANOMALY] 事件更新失敗：{e}")

@@ -23,14 +23,11 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
+from core.config import get_database_url
 from core.device_profile import ANOMALY_THRESHOLD, DEVICE_PROFILES, LEVEL_TEXT, base_device_id, evaluate, get_profile
 from rag.embedder import embed_text
 from rag.qdrant_client import list_documents, search as qdrant_search
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:iotscada123@localhost:5435/iotscada"
-)
 LOCAL_TZ = ZoneInfo("Asia/Taipei")
 MAX_TREND_POINTS = 240      # 趨勢最多回傳幾個時間點，避免塞爆對話
 
@@ -85,7 +82,7 @@ def _time_range(start: str | None, end: str | None, default_hours: int) -> tuple
 
 async def _connect_db():
     try:
-        return await asyncpg.connect(DATABASE_URL, timeout=5)
+        return await asyncpg.connect(get_database_url(), timeout=5)
     except Exception as e:
         raise ToolError(
             f"無法連線 TimescaleDB（{type(e).__name__}）。請確認 timescaledb 容器已啟動："

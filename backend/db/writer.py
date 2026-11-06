@@ -1,13 +1,7 @@
-import asyncpg
 from datetime import datetime, timezone
-import os
 
 from core.device_profile import all_tags
-
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:iotscada123@localhost:5435/iotscada"
-)
+from db.pool import acquire
 
 # 白名單由設備規格決定：只寫入規格裡定義的數值訊號，'source'、'device_id' 這類文字欄位不會進來
 NUMERIC_TAGS = all_tags()
@@ -26,14 +20,15 @@ async def write_to_db(device_id: str, values: dict):
     ]
     if not rows:
         return
-    conn = await asyncpg.connect(DATABASE_URL)
+    # 由 create_task 在背景呼叫，例外沒人接；資料庫斷線時只印一行，不讓錯誤堆疊洗版
     try:
-        await conn.executemany(
-            """
-            INSERT INTO plc_measurements (time, device_id, tag_name, value, quality)
-            VALUES ($1, $2, $3, $4, $5)
-            """,
-            rows
-        )
-    finally:
-        await conn.close()
+        async with acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO plc_measurements (time, device_id, tag_name, value, quality)
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                rows
+            )
+    except Exception as e:
+        print(f"[DB] 寫入失敗：{type(e).__name__}: {e}")

@@ -140,6 +140,23 @@ iot-scada-platform/
 - Siemens TIA Portal V17+（連接真實 PLC）
 - Ollama + qwen3:14b（本地或 Tailscale 連接）
 
+### 設定 .env（密碼只放這裡）
+
+程式碼和 docker-compose 都不寫密碼，一律從 repo 根目錄的 `.env` 讀取（`.env` 已被 `.gitignore` 排除）。
+
+```powershell
+Copy-Item .env.example .env
+python -c "import secrets; print(secrets.token_urlsafe(24))"   # 產生隨機密碼，填進 .env 的 POSTGRES_PASSWORD
+```
+
+全新部署時，`docker-compose.full.yml` 會用這個密碼建立資料庫。資料庫已經存在時，改 `.env` 不會改到資料庫裡的密碼，要另外執行：
+
+```powershell
+docker exec timescaledb psql -U postgres -c "ALTER USER postgres WITH PASSWORD '新密碼';"
+```
+
+連線檢查（在 backend 資料夾）：`python -m tools.check_db`
+
 ### 方式一：Docker Compose（推薦）
 
 ```bash
