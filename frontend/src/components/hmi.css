@@ -1,257 +1,121 @@
-/* ===== 即時值卡片：移動式類比指示條（ISA-101） ===== */
-.hmi-card {
-    cursor: pointer;
+/* ===== 即時值卡片 ===== */
+.indicators {
+  /* 卡片底色＝外框顏色混入 6% 文字色：暗色模式變亮一點、亮色模式變暗一點，兩種主題都分得出來 */
+  --card-bg: color-mix(in srgb, var(--panel) 94%, var(--text) 6%);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.indicators .ind {
+  display: flex; flex-direction: column; min-width: 0;
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px 12px;
+}
+.hmi-card { cursor: pointer; transition: border-color 0.15s; }
+.hmi-card:hover { border-color: var(--muted); }
+
+/* 只有異常時才上色（ISA-101）：偏離＝邊框變亮，警戒／危險＝邊框＋淡淡底色 */
+.indicators .ind.hmi-st-dev { border-color: var(--muted); }
+.indicators .ind.hmi-st-warning {
+  border-color: var(--warn-mark);
+  background: color-mix(in srgb, var(--card-bg) 88%, var(--warn-mark) 12%);
+}
+.indicators .ind.hmi-st-danger {
+  border-color: var(--danger-mark);
+  background: color-mix(in srgb, var(--card-bg) 86%, var(--danger-mark) 14%);
 }
 
-.hmi-card:hover {
-    box-shadow: 0 0 0 1px var(--muted);
-}
+.hmi-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.hmi-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hmi-tag { font-size: 12px; color: var(--muted); letter-spacing: 0.02em; }
+.hmi-name { font-size: 15px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.hmi-bar {
-    position: relative;
-    height: 28px;
-    margin-top: 6px;
-}
+.hmi-val { display: flex; align-items: baseline; gap: 6px; margin-top: 10px; }
+.hmi-num { font-family: var(--font-mono); font-size: 34px; font-weight: 600; line-height: 1; color: var(--text); }
+.hmi-num.warning { color: var(--warn-mark); }
+.hmi-num.danger  { color: var(--danger-mark); }
+.hmi-u { font-size: 14px; color: var(--muted); }
+.hmi-delta { font-family: var(--font-mono); font-size: 12px; color: var(--muted); margin-top: 6px; }
 
+/* 移動式類比指示條 */
+.hmi-bar { position: relative; height: 28px; margin-top: 10px; }
 .hmi-track {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 10px;
-    height: 14px;
-    border: 1px solid var(--line);
-    border-radius: 3px;
-    overflow: hidden;
+  position: absolute; left: 0; right: 0; top: 10px; height: 14px;
+  border: 1px solid var(--line); border-radius: 3px; overflow: hidden;
+  background: var(--panel);
 }
-
-.hmi-zone {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-}
-
-.hmi-zone.normal {
-    background: var(--band);
-}
-
-.hmi-zone.warn {
-    background: color-mix(in srgb, var(--warn-mark) 35%, transparent);
-}
-
-.hmi-zone.danger {
-    background: color-mix(in srgb, var(--danger-mark) 40%, transparent);
-    right: 0;
-}
+.hmi-zone { position: absolute; top: 0; bottom: 0; }
+.hmi-zone.normal { background: var(--band); }
+.hmi-zone.warn   { background: color-mix(in srgb, var(--warn-mark) 14%, transparent); }
+.hmi-zone.danger { background: color-mix(in srgb, var(--danger-mark) 16%, transparent); right: 0; }
+.hmi-zone.warn.on   { background: color-mix(in srgb, var(--warn-mark) 55%, transparent); }
+.hmi-zone.danger.on { background: color-mix(in srgb, var(--danger-mark) 60%, transparent); }
 
 /* 目前值：上方三角形＋貫穿指示條的細線 */
-.hmi-ptr {
-    position: absolute;
-    top: 0;
-    width: 0;
-    height: 26px;
-    --ptr: var(--text);
-}
-
+.hmi-ptr { position: absolute; top: 0; width: 0; height: 26px; --ptr: var(--text); }
 .hmi-ptr::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    transform: translateX(-50%);
-    border-left: 6px solid transparent;
-    border-right: 6px solid transparent;
-    border-top: 8px solid var(--ptr);
+  content: ""; position: absolute; top: 0; left: 0; transform: translateX(-50%);
+  border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid var(--ptr);
 }
-
 .hmi-ptr::after {
-    content: "";
-    position: absolute;
-    top: 8px;
-    left: -1px;
-    width: 2px;
-    height: 18px;
-    background: var(--ptr);
+  content: ""; position: absolute; top: 8px; left: -1px; width: 2px; height: 18px; background: var(--ptr);
 }
+.hmi-ptr.warning { --ptr: var(--warn-mark); }
+.hmi-ptr.danger  { --ptr: var(--danger-mark); }
 
-.hmi-ptr.warning {
-    --ptr: var(--warn-mark);
+.hmi-scale { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 11px; color: var(--muted); margin-top: 2px; }
+.hmi-limits { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.hmi-limits .mono { color: var(--text); }
+.hmi-limits .w, .hmi-limits .w .mono { color: var(--warn-mark); }
+.hmi-limits .d, .hmi-limits .d .mono { color: var(--danger-mark); }
+
+/* 迷你走勢：內嵌小框，標題列放「最近 5 分鐘」與趨勢按鈕 */
+.hmi-spark-box {
+  margin-top: 12px; padding: 8px 10px 6px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
 }
-
-.hmi-ptr.danger {
-    --ptr: var(--danger-mark);
-}
-
-.hmi-scale {
-    display: flex;
-    justify-content: space-between;
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 2px;
-}
-
-.hmi-limits {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px 12px;
-    font-size: 12px;
-    color: var(--muted);
-    margin-top: 6px;
-}
-
-.hmi-limits .w {
-    color: var(--warn-mark);
-}
-
-.hmi-limits .d {
-    color: var(--danger-mark);
-}
-
-.hmi-delta {
-    margin-left: auto;
-    font-size: 12px;
-    color: var(--muted);
-}
-
-.hmi-spark {
-    display: block;
-    width: 100%;
-    height: 40px;
-    margin-top: 8px;
-}
-
-.hmi-card-foot {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-top: 4px;
-}
-
-.hmi-spark-cap {
-    font-size: 11px;
-    color: var(--muted);
-}
-
+.hmi-spark-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hmi-spark-cap { font-size: 11px; color: var(--muted); }
+.hmi-spark { display: block; width: 100%; height: 44px; margin-top: 4px; }
 .hmi-link {
-    min-height: 32px;
-    padding: 0 12px;
-    border-radius: 6px;
-    border: 1px solid var(--line);
-    background: transparent;
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
+  min-height: 28px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--line);
+  background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
 }
-
-.hmi-link:hover {
-    border-color: var(--muted);
-}
+.hmi-link:hover { border-color: var(--muted); }
 
 /* 偏離正常但未達警戒：空心框，不用警報色 */
-.ind-state.dev {
-    background: transparent;
-    border: 1px solid var(--line);
-    color: var(--text);
-}
+.ind-state.dev { background: transparent; border: 1px solid var(--line); color: var(--text); }
 
 /* ===== 詳細趨勢彈出視窗 ===== */
 .hmi-dialog {
-    width: min(1200px, 94vw);
-    max-height: 90vh;
-    padding: 0;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: var(--panel);
-    color: var(--text);
+  width: min(1200px, 94vw); max-height: 90vh; padding: 0;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text);
 }
-
-.hmi-dialog::backdrop {
-    background: rgba(0, 0, 0, 0.55);
-}
-
-.hmi-dlg-body {
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.hmi-dlg-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-}
-
-.hmi-dlg-title {
-    margin: 0;
-    font-size: 18px;
-}
-
-.hmi-dlg-tools {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 12px;
-}
-
-.hmi-trow {
-    display: grid;
-    grid-template-columns: 200px minmax(0, 1fr);
-    gap: 12px;
-    align-items: center;
-}
-
-.hmi-tlbl {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-
-.hmi-cur {
-    font-family: var(--font-mono);
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text);
-}
-
-.hmi-cur.warning {
-    color: var(--warn-mark);
-}
-
-.hmi-cur.danger {
-    color: var(--danger-mark);
-}
-
-.hmi-sub {
-    margin: 4px 0 0;
-    padding-top: 12px;
-    border-top: 1px solid var(--line);
-    font-size: 13px;
-    color: var(--muted);
-}
-
-.hmi-ml-track {
-    position: relative;
-    height: 10px;
-    border-radius: 2px;
-    background: var(--band);
-}
-
+.hmi-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+.hmi-dlg-body { padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.hmi-dlg-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.hmi-dlg-title { margin: 0; font-size: 18px; }
+.hmi-dlg-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.hmi-trow { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 12px; align-items: center; }
+.hmi-tlbl { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hmi-cur { font-family: var(--font-mono); font-size: 16px; font-weight: 600; color: var(--text); }
+.hmi-cur.warning { color: var(--warn-mark); }
+.hmi-cur.danger  { color: var(--danger-mark); }
+.hmi-sub { margin: 4px 0 0; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.hmi-ml-track { position: relative; height: 10px; border-radius: 2px; background: var(--band); }
 .hmi-ml-seg {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    border: 1px solid var(--warn-mark);
-    border-radius: 2px;
-    background: repeating-linear-gradient(135deg, var(--warn-mark) 0 4px, transparent 4px 8px);
+  position: absolute; top: 0; bottom: 0; border: 1px solid var(--warn-mark); border-radius: 2px;
+  background: repeating-linear-gradient(135deg, var(--warn-mark) 0 4px, transparent 4px 8px);
+}
+@media (max-width: 640px) {
+  .hmi-trow { grid-template-columns: 1fr; }
 }
 
-@media (max-width: 640px) {
-    .hmi-trow {
-        grid-template-columns: 1fr;
-    }
-}
+/* ===== 監控頁兩欄等高：右欄的告警面板伸長補滿，控制面板貼齊底部 ===== */
+.columns { align-items: stretch; }
+.columns > .col-wide,
+.columns > .col-side { display: flex; flex-direction: column; }
+.columns > .col-wide > .panel { flex: 1 1 auto; }
+.columns > .col-side > .panel:first-child { flex: 1 1 auto; }
