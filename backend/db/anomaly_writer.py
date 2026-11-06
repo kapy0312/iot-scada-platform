@@ -1,6 +1,7 @@
+import asyncio
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 
 import asyncpg
 
@@ -9,33 +10,80 @@ DATABASE_URL = os.getenv(
     "postgresql://postgres:iotscada123@localhost:5435/iotscada"
 )
 
+# 同一事件的新增與更新必須依序執行：第一筆還沒拿到 id 前，第二筆不能又新增一次
+_lock = asyncio.Lock()
 
-async def write_anomaly_event(device_id: str, values: dict, anomaly: dict):
+
+def _json(v) -> str | None:
+    return None if v is None else json.dumps(v, ensure_ascii=False)
+
+
+async def _upsert_incident(conn, inc: dict) -> None:
+    """事件第一次寫入時新增並取得 id，之後都是更新"""
+    if inc["id"] is None:
+        inc["id"] = await conn.fetchval("""
+            INSERT INTO anomaly_incidents
+                (device_id, started_at, ended_at, records, level, severity,
+                 peak, min_score, ai_analysis, ai_source)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb)
+            RETURNING id
+        """, inc["device_id"], inc["started_at"], inc["ended_at"], inc["records"],
+            inc["level"], inc["severity"], _json(inc["peak"]), inc["min_score"],
+            inc["ai_analysis"], _json(inc["ai_source"]))
+    else:
+        await conn.execute("""
+            UPDATE anomaly_incidents
+            SET ended_at = $2, records = $3, level = $4, severity = $5,
+                peak = $6::jsonb, min_score = $7, ai_analysis = $8, ai_source = $9::jsonb,
+                updated_at = now()
+            WHERE id = $1
+        """, inc["id"], inc["ended_at"], inc["records"], inc["level"], inc["severity"],
+            _json(inc["peak"]), inc["min_score"], inc["ai_analysis"], _json(inc["ai_source"]))
+
+
+async def record_anomaly(device_id: str, values: dict, anomaly: dict, incident: dict, at: datetime):
     """
-    異常時寫入 anomaly_events
-    - readings（JSONB）：所有訊號的讀值，之後新增訊號不必改資料表
+    每個異常秒呼叫一次：先新增／更新所屬事件，再寫入這一秒的紀錄並連到事件
+    - readings（JSONB）：所有訊號的讀值
     - motor_speed / temperature / pressure：舊欄位照常寫入，相容舊的查詢
-    需要先執行 db/migrations/001_anomaly_readings.sql
+    需要先執行 db/migrations/001、002
     """
-    try:
-        conn = await asyncpg.connect(DATABASE_URL)
+    async with _lock:
         try:
-            await conn.execute("""
-                INSERT INTO anomaly_events
-                    (time, device_id, anomaly_score, motor_speed, temperature, pressure, ai_analysis, readings)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-            """,
-                datetime.now(timezone.utc),
-                device_id,
-                anomaly.get("score"),
-                values.get("motor_speed"),
-                values.get("temperature"),
-                values.get("pressure"),
-                anomaly.get("ai_analysis"),
-                json.dumps(values),
-            )
-        finally:
-            await conn.close()
-        print(f"[ANOMALY] 事件寫入 DB：score={anomaly.get('score'):.4f}")
-    except Exception as e:
-        print(f"[ANOMALY] 寫入失敗：{e}")
+            conn = await asyncpg.connect(DATABASE_URL)
+            try:
+                await _upsert_incident(conn, incident)
+                await conn.execute("""
+                    INSERT INTO anomaly_events
+                        (time, device_id, anomaly_score, motor_speed, temperature, pressure,
+                         ai_analysis, readings, ai_source, incident_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+                """,
+                    at,
+                    device_id,
+                    anomaly.get("score"),
+                    values.get("motor_speed"),
+                    values.get("temperature"),
+                    values.get("pressure"),
+                    anomaly.get("ai_analysis"),
+                    json.dumps(values),
+                    _json(anomaly.get("ai_source")),
+                    incident["id"],
+                )
+            finally:
+                await conn.close()
+        except Exception as e:
+            print(f"[ANOMALY] 寫入失敗：{e}")
+
+
+async def save_incident(incident: dict):
+    """診斷完成時呼叫：事件可能已經沒有新的異常秒了，要主動寫回診斷"""
+    async with _lock:
+        try:
+            conn = await asyncpg.connect(DATABASE_URL)
+            try:
+                await _upsert_incident(conn, incident)
+            finally:
+                await conn.close()
+        except Exception as e:
+            print(f"[ANOMALY] 事件更新失敗：{e}")

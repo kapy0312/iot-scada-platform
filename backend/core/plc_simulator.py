@@ -2,20 +2,24 @@ import asyncio
 import os
 import random
 import time
+from datetime import datetime, timezone
+
 from asyncua import Client
 from core.device_profile import evaluate, get_profile, get_tags
+from core.incidents import INCIDENT_GAP_SECONDS, absorb, new_incident, severity_and_level
 from core.ws_manager import manager
 from db.writer import write_to_db
-from db.anomaly_writer import write_anomaly_event
+from db.anomaly_writer import record_anomaly, save_incident
 from ml.inferencer import AnomalyDetector
 from ml.ollama_analyzer import analyze_anomaly
 
 detector = AnomalyDetector()
 OLLAMA_COOLDOWN = 60.0      # 同一次事件內，兩次 AI 診斷至少間隔 60 秒
-INCIDENT_GAP = 60.0         # 正常超過 60 秒後再異常，視為新事件（與 MCP、前端事件合併規則一致）
 _last_ollama_call = 0.0
 _last_anomaly_at = 0.0
 _latest_ai_analysis: str = ""
+_latest_ai_source: dict | None = None
+_incident: dict | None = None   # 目前進行中的事件（記憶體版本，每個異常秒同步寫入資料庫）
 
 PLC_URL = os.getenv("PLC_URL", "opc.tcp://192.168.0.10:4840")
 NS = 3
@@ -160,7 +164,7 @@ async def _mock_poll_loop():
 
 async def _process_reading(values: dict, motor_enable: int = 1):
     """
-    每秒一次：ML 推論 → 判斷告警 → 必要時觸發 AI 診斷 → 推送畫面、寫入資料庫
+    每秒一次：ML 推論 → 判斷告警 → 維護事件 → 必要時觸發 AI 診斷 → 推送畫面、寫入資料庫
 
     兩種告警來源分開看：
     - 規格告警（rule_alarm）：任一訊號達警戒值或危險值，依設備規格判斷，反應最快
@@ -168,9 +172,10 @@ async def _process_reading(values: dict, motor_enable: int = 1):
     AI 診斷在「規格告警」或「ML 異常且有訊號超出正常範圍」時觸發；
     ML 異常但所有訊號都正常時，多半是統計雜訊，只記錄不診斷。
     """
-    global _last_ollama_call, _last_anomaly_at, _latest_ai_analysis
+    global _last_ollama_call, _last_anomaly_at, _latest_ai_analysis, _latest_ai_source, _incident
     device_id = get_active_device_id()
     now = time.time()
+    at = datetime.now(timezone.utc)
 
     anomaly = detector.update(values)
 
@@ -182,21 +187,32 @@ async def _process_reading(values: dict, motor_enable: int = 1):
     abnormal = bool(anomaly.get("is_anomaly")) or rule_alarm
 
     if abnormal:
-        if now - _last_anomaly_at > INCIDENT_GAP:
+        if (
+            _incident is None
+            or _incident["device_id"] != device_id
+            or now - _last_anomaly_at > INCIDENT_GAP_SECONDS
+        ):
             # 新的一次事件：清掉上一次的診斷，並允許立刻重新診斷
             _latest_ai_analysis = ""
+            _latest_ai_source = None
             _last_ollama_call = 0.0
+            _incident = new_incident(device_id, at)
         _last_anomaly_at = now
+
+        severity, worst = severity_and_level(device_id, values)
+        absorb(_incident, values, severity, worst, anomaly.get("score"), at)
 
         should_diagnose = rule_alarm or (anomaly.get("is_anomaly") and out_of_range)
         if not should_diagnose:
             anomaly["note"] = "所有訊號都在正常範圍內，未觸發 AI 診斷"
         elif now - _last_ollama_call > OLLAMA_COOLDOWN:
             _last_ollama_call = now
-            asyncio.create_task(_fetch_ollama_analysis(dict(values), anomaly, device_id))
+            asyncio.create_task(_fetch_ollama_analysis(dict(values), device_id, _incident, severity))
 
         if _latest_ai_analysis:
             anomaly["ai_analysis"] = _latest_ai_analysis
+            anomaly["ai_source"] = _latest_ai_source
+        anomaly["incident_id"] = _incident["id"]   # 事件第一秒還沒寫進資料庫時會是 None
 
     data = {
         "timestamp": now,
@@ -211,12 +227,25 @@ async def _process_reading(values: dict, motor_enable: int = 1):
     await manager.broadcast(data)
     asyncio.create_task(write_to_db(device_id, values))
     if abnormal:
-        asyncio.create_task(write_anomaly_event(device_id, values, anomaly))
+        asyncio.create_task(record_anomaly(device_id, values, anomaly, _incident, at))
 
 
-async def _fetch_ollama_analysis(values: dict, anomaly: dict, device_id: str):
-    global _latest_ai_analysis
-    analysis = await analyze_anomaly(values, device_id=device_id)
-    _latest_ai_analysis = analysis
-    anomaly["ai_analysis"] = analysis
-    print(f"[Ollama] 分析完成：\n{analysis}")
+async def _fetch_ollama_analysis(values: dict, device_id: str, incident: dict, severity: int):
+    """
+    診斷完成後只寫回「觸發它的那次事件」：
+    - 畫面顯示：那次事件還在進行中才更新，避免舊診斷掛到新事件上
+    - 事件表：這份診斷產生時的嚴重度不低於目前那份，才取代（保留最嚴重時刻的診斷）
+    """
+    global _latest_ai_analysis, _latest_ai_source
+    result = await analyze_anomaly(values, device_id=device_id)
+    print(f"[Ollama] 分析完成：\n{result['text']}")
+
+    if incident is _incident:
+        _latest_ai_analysis = result["text"]
+        _latest_ai_source = result.get("source")
+
+    if result.get("ok") and severity >= incident.get("diag_severity", -1):
+        incident["diag_severity"] = severity
+        incident["ai_analysis"] = result["text"]
+        incident["ai_source"] = result.get("source")
+        asyncio.create_task(save_incident(incident))

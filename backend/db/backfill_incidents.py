@@ -16,15 +16,14 @@ import os
 
 import asyncpg
 
-from core.device_profile import evaluate, get_profile
+from core.device_profile import get_profile
+from core.incidents import INCIDENT_GAP_SECONDS as GAP_SECONDS, LEVEL_ORDER, severity_and_level
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:iotscada123@localhost:5435/iotscada"
 )
 
-GAP_SECONDS = 60
-LEVEL_ORDER = ["normal", "low", "high", "warning", "danger"]
 LEGACY_COLUMNS = ("motor_speed", "temperature", "pressure")
 
 
@@ -40,22 +39,6 @@ def readings_of(row) -> dict:
         if isinstance(v, (int, float)) and not isinstance(v, bool)
     }
 
-
-def severity_and_level(device_id: str, readings: dict) -> tuple[int, str]:
-    """嚴重度＝各訊號等級加總；等級＝最嚴重那個訊號的等級"""
-    profile = get_profile(device_id)
-    if not profile:
-        return 0, "normal"
-    total, worst = 0, "normal"
-    for tag, spec in profile["tags"].items():
-        v = readings.get(tag)
-        if v is None:
-            continue
-        lv = evaluate(spec, v)
-        total += LEVEL_ORDER.index(lv)
-        if LEVEL_ORDER.index(lv) > LEVEL_ORDER.index(worst):
-            worst = lv
-    return total, worst
 
 
 def summarize(group: list) -> dict:
