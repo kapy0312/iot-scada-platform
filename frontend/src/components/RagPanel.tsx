@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { API_BASE } from "../config";
+import { apiFetch } from "../api";
 
 interface RagDocument {
   file_hash: string;
@@ -20,7 +20,7 @@ export default function RagPanel() {
   const fetchDocuments = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/rag/documents`);
+      const res = await apiFetch("/api/rag/documents");
       const data = await res.json();
       setDocuments(data.documents ?? []);
     } catch {
@@ -42,9 +42,11 @@ export default function RagPanel() {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("device_id", deviceId);
-      const res = await fetch(`${API_BASE}/api/rag/upload`, { method: "POST", body: formData });
+      const res = await apiFetch("/api/rag/upload", { method: "POST", body: formData });
       const data = await res.json();
-      if (data.status === "ok") {
+      if (!res.ok) {
+        setMessage({ ok: false, text: res.status === 401 ? "請先登入再上傳" : (data.detail ?? "上傳失敗") });
+      } else if (data.status === "ok") {
         setFile(null);
         setMessage({ ok: true, text: `已上傳 ${data.filename}，切成 ${data.chunks_embedded} 段` });
         await fetchDocuments();
@@ -63,7 +65,8 @@ export default function RagPanel() {
   const handleDelete = async (fileHash: string, filename: string) => {
     if (!window.confirm(`確定刪除「${filename}」？此操作無法復原。`)) return;
     try {
-      await fetch(`${API_BASE}/api/rag/documents/${fileHash}`, { method: "DELETE" });
+      const res = await apiFetch(`/api/rag/documents/${fileHash}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
       await fetchDocuments();
     } catch {
       setMessage({ ok: false, text: "刪除失敗" });
@@ -74,7 +77,7 @@ export default function RagPanel() {
     // 樂觀更新，先更新畫面再打 API，失敗時回滾
     setDocuments((prev) => prev.map((d) => (d.file_hash === fileHash ? { ...d, enabled: !currentEnabled } : d)));
     try {
-      const res = await fetch(`${API_BASE}/api/rag/documents/${fileHash}`, {
+      const res = await apiFetch(`/api/rag/documents/${fileHash}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: !currentEnabled }),

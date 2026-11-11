@@ -14,41 +14,96 @@ async function readMessage(res: Response): Promise<string> {
   return `HTTP ${res.status}`;
 }
 
+/** 需要重新登入時發出的事件：App 收到後跳出登入視窗 */
+export const AUTH_REQUIRED_EVENT = "scada:auth-required";
+
+/**
+ * 所有 API 呼叫都走這裡：
+ * - credentials: "include"：讓瀏覽器帶上登入 cookie（前端 3000 port、後端 8000 port 算跨來源）
+ * - 寫入請求加上 X-SCADA-Request header，後端用它擋跨站偽造請求
+ * - 收到 401 時通知 App 跳出登入視窗
+ */
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers = new Headers(init.headers);
+  if (method !== "GET") headers.set("X-SCADA-Request", "1");
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "include" });
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
+  }
+  return res;
+}
+
+/** 不成功時丟出後端給的錯誤訊息 */
+async function ensureOk(res: Response): Promise<Response> {
+  if (!res.ok) throw new Error(await readMessage(res));
+  return res;
+}
+
+// ---------- 登入 ----------
+
+export interface AuthUser {
+  username: string;
+  role: string;
+  expires_at?: string;
+}
+
+export async function getMe(): Promise<AuthUser | null> {
+  const res = await ensureOk(await apiFetch("/api/auth/me"));
+  return (await res.json()).user ?? null;
+}
+
+export async function login(username: string, password: string): Promise<AuthUser> {
+  const res = await ensureOk(
+    await apiFetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    }),
+  );
+  return (await res.json()).user as AuthUser;
+}
+
+export async function logout(): Promise<void> {
+  await apiFetch("/api/auth/logout", { method: "POST" });
+}
+
 export async function getDataSource(): Promise<Source> {
-  const res = await fetch(`${API_BASE}/api/system/data-source`);
+  const res = await ensureOk(await apiFetch("/api/system/data-source"));
   const data = await res.json();
   return data.source as Source;
 }
 
 export async function setDataSource(source: Source): Promise<Source> {
-  const res = await fetch(`${API_BASE}/api/system/data-source`, {
+  const res = await ensureOk(await apiFetch("/api/system/data-source", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source }),
-  });
+  }));
   const data = await res.json();
   if (data.status !== "ok") throw new Error(data.message ?? "切換失敗");
   return data.source as Source;
 }
 
 export async function triggerMockAnomaly(durationSeconds = 40): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/system/simulate-anomaly`, {
+  const res = await ensureOk(await apiFetch("/api/system/simulate-anomaly", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ duration_seconds: durationSeconds }),
-  });
+  }));
   const data = await res.json();
   if (data.status !== "ok") throw new Error(data.message ?? "觸發失敗");
 }
 
 export async function writeTag(tag: string, value: number): Promise<{ ok: boolean; message: string }> {
   try {
-    const res = await fetch(`${API_BASE}/api/control/write`, {
+    const res = await apiFetch("/api/control/write", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tag, value }),
     });
     if (res.ok) return { ok: true, message: "已寫入" };
+    if (res.status === 401) return { ok: false, message: "請先登入" };
     return { ok: false, message: await readMessage(res) };
   } catch {
     return { ok: false, message: "連線失敗，請確認後端服務" };
@@ -88,20 +143,18 @@ export interface ModelInfo {
 }
 
 export async function getModelInfo(): Promise<ModelInfo> {
-  const res = await fetch(`${API_BASE}/api/system/model-info`);
-  if (!res.ok) throw new Error(String(res.status));
+  const res = await ensureOk(await apiFetch("/api/system/model-info"));
   return res.json();
 }
 
 export async function reloadModel(): Promise<ModelInfo> {
-  const res = await fetch(`${API_BASE}/api/system/reload-model`, { method: "POST" });
-  if (!res.ok) throw new Error(String(res.status));
+  const res = await ensureOk(await apiFetch("/api/system/reload-model", { method: "POST" }));
   return res.json();
 }
 
 export async function getAnomalyEvents(deviceId: string, hours: number): Promise<AnomalyEvent[]> {
-  const res = await fetch(
-    `${API_BASE}/api/anomaly-events?device_id=${encodeURIComponent(deviceId)}&hours=${hours}`
+  const res = await apiFetch(
+    `/api/anomaly-events?device_id=${encodeURIComponent(deviceId)}&hours=${hours}`
   );
   const data = await res.json();
   return (data.events ?? []) as AnomalyEvent[];
@@ -151,8 +204,8 @@ export interface Incident {
 }
 
 export async function getIncidents(deviceId: string, hours: number): Promise<Incident[]> {
-  const res = await fetch(
-    `${API_BASE}/api/incidents?device_id=${encodeURIComponent(deviceId)}&hours=${hours}`
+  const res = await apiFetch(
+    `/api/incidents?device_id=${encodeURIComponent(deviceId)}&hours=${hours}`
   );
   if (!res.ok) throw new Error(String(res.status));
   const data = await res.json();

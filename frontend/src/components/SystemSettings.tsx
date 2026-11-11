@@ -25,8 +25,8 @@ export default function SystemSettings({ historyCount, threshold, profileFromSer
     setReloading(true);
     try {
       setModel(await reloadModel());
-    } catch {
-      setError("重新載入模型失敗");
+    } catch (e) {
+      setError(`重新載入模型失敗：${e instanceof Error ? e.message : ""}`);
     } finally {
       setReloading(false);
     }

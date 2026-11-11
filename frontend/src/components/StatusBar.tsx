@@ -1,3 +1,4 @@
+import type { AuthUser } from "../api";
 import type { Alarm } from "../hooks/useAlarms";
 import type { Theme } from "../hooks/useTheme";
 import { DangerIcon, WarningIcon } from "./Icons";
@@ -10,9 +11,12 @@ interface Props {
   alarms: Alarm[];
   theme: Theme;
   onToggleTheme: () => void;
+  user: AuthUser | null;
+  onLogin: () => void;
+  onLogout: () => void;
 }
 
-export default function StatusBar({ deviceName, source, isConnected, lastUpdate, alarms, theme, onToggleTheme }: Props) {
+export default function StatusBar({ deviceName, source, isConnected, lastUpdate, alarms, theme, onToggleTheme, user, onLogin, onLogout }: Props) {
   const top = alarms[0]?.level;
   const chipClass = top === "danger" ? "chip danger" : top === "warning" ? "chip warning" : "chip";
   const time = lastUpdate
@@ -41,6 +45,14 @@ export default function StatusBar({ deviceName, source, isConnected, lastUpdate,
         {top === "warning" && <WarningIcon size={16} />}
         {alarms.length > 0 ? `作用中告警 ${alarms.length}` : "無告警"}
       </div>
+      {user ? (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span className="small">操作員 <strong>{user.username}</strong></span>
+          <button type="button" className="btn ghost" onClick={onLogout}>登出</button>
+        </span>
+      ) : (
+        <button type="button" className="btn" onClick={onLogin}>登入</button>
+      )}
       <button type="button" className="btn ghost" onClick={onToggleTheme} aria-label="切換淺色或深色主題">
         {theme === "light" ? "深色模式" : "淺色模式"}
       </button>

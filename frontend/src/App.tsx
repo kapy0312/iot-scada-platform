@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useTheme } from "./hooks/useTheme";
 import { useAlarms } from "./hooks/useAlarms";
+import { useAuth } from "./hooks/useAuth";
 import { useDeviceProfile, type TagKey } from "./deviceProfile";
 import { WS_URL } from "./config";
 import StatusBar from "./components/StatusBar";
@@ -16,6 +17,7 @@ import ControlPanel from "./components/ControlPanel";
 import EventLog from "./components/EventLog";
 import RagPanel from "./components/RagPanel";
 import SystemSettings from "./components/SystemSettings";
+import LoginDialog from "./components/LoginDialog";
 
 type Tab = "monitor" | "manuals" | "settings";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -27,6 +29,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
 export default function App() {
   const { data, history, isConnected, sendCommand } = useWebSocket(WS_URL);
   const { theme, toggle } = useTheme();
+  const auth = useAuth();
   const [tab, setTab] = useState<Tab>("monitor");
   // 目前開啟詳細趨勢的訊號；null 代表彈出視窗關閉
   const [trendTag, setTrendTag] = useState<TagKey | null>(null);
@@ -63,6 +66,9 @@ export default function App() {
         alarms={alarms}
         theme={theme}
         onToggleTheme={toggle}
+        user={auth.user}
+        onLogin={auth.openDialog}
+        onLogout={auth.logout}
       />
 
       <nav className="tabs" role="tablist" aria-label="畫面分頁">
@@ -103,6 +109,8 @@ export default function App() {
                   onCommand={sendCommand}
                   motorEnabled={data ? Boolean(data.motor_enable) : null}
                   source={data?.source}
+                  canOperate={auth.user !== null}
+                  onRequireLogin={auth.openDialog}
                 />
               </div>
             </div>
@@ -134,6 +142,8 @@ export default function App() {
         profile={profile}
         onClose={() => setTrendTag(null)}
       />
+
+      <LoginDialog open={auth.dialogOpen} onLogin={auth.login} onClose={auth.closeDialog} />
     </>
   );
 }

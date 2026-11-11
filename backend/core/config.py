@@ -42,6 +42,25 @@ def get_database_url() -> str:
     return f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}@{host}:{port}/{db}"
 
 
+CLOUD_URL_VARS = {
+    "admin":  "TIGER_URL",         # tsdbadmin：只給 tools.cloud_admin 建表、建帳號用
+    "writer": "TIGER_EDGE_URL",    # edge_writer：backend 同步用
+    "reader": "TIGER_READER_URL",  # mcp_reader：之後雲端 MCP 用
+}
+
+
+def get_cloud_url(kind: str) -> str:
+    var = CLOUD_URL_VARS[kind]
+    url = os.getenv(var, "").strip()
+    if not url or "change-me" in url:
+        raise ConfigError(f"找不到雲端連線字串：請在 {ENV_FILE} 設定 {var}=...（範本見 .env.example）")
+    return url
+
+
+def cloud_sync_enabled() -> bool:
+    return os.getenv("CLOUD_SYNC_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+
+
 def masked(url: str) -> str:
     """印 log 用：把密碼換成 ***"""
     if "@" not in url or "://" not in url:

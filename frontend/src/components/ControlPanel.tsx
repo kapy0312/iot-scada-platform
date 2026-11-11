@@ -5,16 +5,19 @@ interface Props {
   onCommand: (tag: string, value: number) => Promise<{ ok: boolean; message: string }>;
   motorEnabled: boolean | null;
   source?: string;
+  canOperate: boolean;          // 已登入才可操作
+  onRequireLogin: () => void;
 }
 
 const SPEED_MIN = 0;
 const SPEED_MAX = 1800;
 
-export default function ControlPanel({ onCommand, motorEnabled, source }: Props) {
+export default function ControlPanel({ onCommand, motorEnabled, source, canOperate, onRequireLogin }: Props) {
   const [speedInput, setSpeedInput] = useState("1480");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const isMock = source === "mock";
+  const locked = busy || !canOperate;
 
   const send = async (label: string, tag: string, value: number) => {
     const target = isMock ? "（mock 模式，指令不會送到實體 PLC）" : "（會寫入 PLC）";
@@ -46,17 +49,24 @@ export default function ControlPanel({ onCommand, motorEnabled, source }: Props)
     <section className="panel" aria-labelledby="ctrl-h" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <h2 id="ctrl-h" className="panel-title">控制面板</h2>
 
+      {!canOperate && (
+        <div className="kv" role="note">
+          <span className="small muted">登入後才能操作，每次寫入都會記錄</span>
+          <button type="button" className="btn" onClick={onRequireLogin}>登入</button>
+        </div>
+      )}
+
       <div className="kv">
         <span className="muted">運轉狀態</span>
         <strong>{motorEnabled === null ? "—" : motorEnabled ? "RUNNING" : "STOPPED"}</strong>
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>
-        <button type="button" className="btn" style={{ flex: "1 1 0" }} disabled={busy}
+        <button type="button" className="btn" style={{ flex: "1 1 0" }} disabled={locked}
           aria-pressed={motorEnabled === true} onClick={() => send("啟動馬達", "motor_enable", 1)}>
           啟動
         </button>
-        <button type="button" className="btn" style={{ flex: "1 1 0" }} disabled={busy}
+        <button type="button" className="btn" style={{ flex: "1 1 0" }} disabled={locked}
           aria-pressed={motorEnabled === false} onClick={() => send("停止馬達", "motor_enable", 0)}>
           停止
         </button>
@@ -70,7 +80,7 @@ export default function ControlPanel({ onCommand, motorEnabled, source }: Props)
           <input id="speed-sp" className="input mono" type="number" min={SPEED_MIN} max={SPEED_MAX}
             value={speedInput} onChange={(e) => setSpeedInput(e.target.value)} aria-invalid={!speedValid} />
         </div>
-        <button type="button" className="btn primary" disabled={busy || !speedValid}
+        <button type="button" className="btn primary" disabled={locked || !speedValid}
           onClick={() => send(`設定轉速為 ${speed} RPM`, "motor_speed_setpoint", speed)}>
           寫入
         </button>
@@ -83,7 +93,7 @@ export default function ControlPanel({ onCommand, motorEnabled, source }: Props)
       {isMock && (
         <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <span className="muted" style={{ fontSize: 13 }}>測試工具（僅 mock）</span>
-          <button type="button" className="btn ghost" disabled={busy} onClick={onTrigger}>
+          <button type="button" className="btn ghost" disabled={locked} onClick={onTrigger}>
             觸發模擬異常（40 秒）
           </button>
         </div>

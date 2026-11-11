@@ -14,6 +14,13 @@ services:
       PLC_URL: opc.tcp://192.168.0.10:4840
       # 接 PLCSIM 時用 -SIM，模擬資料不會進入訓練集；之後接實機要改回 S7-1511T
       OPCUA_DEVICE_ID: S7-1511T-SIM
+      # 允許呼叫 API 的前端網址（逗號分隔）；用 Tailscale IP 開前端時要加上那個網址
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      # 雲端同步（Phase 1）：.env 設 CLOUD_SYNC_ENABLED=true 並填 TIGER_EDGE_URL 才會啟動
+      CLOUD_SYNC_ENABLED: ${CLOUD_SYNC_ENABLED:-false}
+      TIGER_EDGE_URL: ${TIGER_EDGE_URL:-}
+      SYNC_EXCLUDE_SUFFIXES: ${SYNC_EXCLUDE_SUFFIXES:--MOCK}
     volumes:
       - ./backend/models:/app/models
 

@@ -30,6 +30,11 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}@timescaledb:5432/iotscada
       QDRANT_URL: http://qdrant:6333
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      CLOUD_SYNC_ENABLED: ${CLOUD_SYNC_ENABLED:-false}
+      TIGER_EDGE_URL: ${TIGER_EDGE_URL:-}
+      SYNC_EXCLUDE_SUFFIXES: ${SYNC_EXCLUDE_SUFFIXES:--MOCK}
 
   frontend:
     build: ./frontend

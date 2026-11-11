@@ -157,6 +157,24 @@ docker exec timescaledb psql -U postgres -c "ALTER USER postgres WITH PASSWORD '
 
 連線檢查（在 backend 資料夾）：`python -m tools.check_db`
 
+### 登入帳號與操作紀錄
+
+寫入 PLC、切換資料源、觸發模擬異常、重新載入模型、上傳／刪除／啟停手冊都要先登入，每次操作會記到 `audit_log` 表（誰、來源 IP、參數、寫入前的值、結果）。讀取資料不用登入。
+
+```powershell
+# 第一次：建立三張表（帳號、登入狀態、操作紀錄）
+Get-Content backend/db/migrations/004_auth_audit.sql | docker exec -i timescaledb psql -U postgres -d iotscada
+
+# 建立帳號（在 backend 資料夾，密碼互動輸入，不會留在指令紀錄）
+cd backend
+python -m tools.create_user kevin
+python -m tools.create_user --list          # 列出帳號
+python -m tools.create_user kevin --reset   # 重設密碼，並登出所有已登入的瀏覽器
+python -m tools.create_user kevin --disable # 停用帳號
+```
+
+用 Tailscale IP 開前端時（例如 `http://100.89.23.28:3000`），要把這個網址加進 `.env` 的 `CORS_ORIGINS`，而且前端的 `VITE_API_BASE` 要用同一個主機名稱（同樣用 IP 或同樣用 localhost），登入 cookie 才會被帶上。
+
 ### 方式一：Docker Compose（推薦）
 
 ```bash
@@ -265,8 +283,12 @@ ollama pull qwen3:14b
 | 方法 | 路徑 | 說明 |
 |---|---|---|
 | `WS` | `/ws/realtime` | 即時 PLC 資料推送 |
-| `POST` | `/api/control/write` | 反向控制（motor_enable/speed_setpoint）|
+| `POST` | `/api/auth/login` | 登入（成功後發 HttpOnly cookie）|
+| `POST` | `/api/auth/logout` | 登出 |
+| `GET` | `/api/auth/me` | 目前登入的使用者，沒登入回 `{"user": null}` |
+| `POST` | `/api/control/write` | 反向控制（motor_enable/speed_setpoint），🔒 需登入；PLC 寫入失敗回 502 |
 | `GET` | `/api/history` | 歷史資料查詢 |
+| `GET` | `/api/system/sync-status` | 雲端同步狀態（同步到哪、落後幾秒、最後錯誤）|
 | `GET` | `/api/anomaly-events` | 異常事件記錄查詢 |
 | `GET` | `/health` | 健康檢查 |
 | `GET` | `/docs` | Swagger API 文件 |
@@ -290,6 +312,8 @@ ollama pull qwen3:14b
 ```
 
 ### 控制指令格式
+
+寫入類 API 都要帶登入 cookie 和 `X-SCADA-Request: 1` header（擋跨站偽造請求），否則回 401／403。
 
 ```json
 POST /api/control/write
@@ -316,6 +340,35 @@ POST /api/control/write
     ↓
 detector.reload_model() 熱更新（不需重啟）
 ```
+
+---
+
+## 雲端同步（Tiger Cloud）
+
+本地每秒的原始資料先由 TimescaleDB 自動整理成每 10 秒一筆（平均、最小、最大、筆數），backend 每 60 秒把整理好的部分和事件表送到 Tiger Cloud。原始資料不上雲。
+
+```
+plc_measurements（每秒，本地 90 天）
+    ↓ continuous aggregate，每 30 秒整理「2 小時前～20 秒前」
+plc_measurements_10s（每 10 秒，本地 90 天）
+    ↓ backend 同步（edge_writer 帳號，watermark + upsert）
+Tiger Cloud measurements_10s（壓縮 30 天後、保存 365 天）＋ anomaly_incidents
+    ↓ 之後雲端 MCP 讀取（mcp_reader 帳號，只能讀）
+```
+
+- **不漏**：同步指標（`sync_state.watermark`）只在雲端確認收到後才往前推；斷線、雲端暫停、backend 重開都從原處補送，每批最多 6 小時
+- **不重複**：雲端以（設備、訊號、10 秒區間）為主鍵 upsert，重送只會覆蓋
+- **晚到資料**：每輪往回多送 15 分鐘；超過 2 小時才補進原始表的資料，用 `python -m tools.sync_admin refresh` 重算後重送
+- **不同步**：`-MOCK` 設備（內建亂數模擬）
+
+```powershell
+cd backend
+python -m tools.sync_admin status              # 同步到哪裡、落後多久
+python -m tools.sync_admin compare --hours 24  # 逐小時比對本地與雲端筆數
+python -m tools.cloud_admin check              # 確認兩個雲端帳號的權限
+```
+
+建置步驟：本地執行 `db/migrations/003_cagg_10s.sql`；雲端用 `python -m tools.cloud_admin apply` 依序執行 `db/cloud/001_schema.sql`、`002_roles.sql`，再用 `python -m tools.cloud_admin password` 設兩個帳號的密碼；`.env` 填 `TIGER_EDGE_URL` 並設 `CLOUD_SYNC_ENABLED=true`。
 
 ---
 

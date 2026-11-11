@@ -1,13 +1,15 @@
 import hashlib
 import uuid
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from pydantic import BaseModel
 from qdrant_client.models import PointStruct
 
 from rag.chunker import build_chunks
 from rag.embedder import embed_batch
 from rag.qdrant_client import upsert_chunks, file_exists, list_documents, delete_document, set_document_enabled
+from core.auth import client_ip, require_operator
 from core.device_profile import base_device_id
+from db.audit import write_audit
 
 router = APIRouter()
 
@@ -16,8 +18,10 @@ CHUNKER_VERSION = 2  # 2 = 依章節切塊，payload 含 section / page
 
 @router.post("/api/rag/upload")
 async def upload_manual(
+    request: Request,
     file: UploadFile = File(...),
     device_id: str = Form(default="general"),
+    user: dict = Depends(require_operator),
 ):
     content = await file.read()
     file_hash = hashlib.sha256(content).hexdigest()
@@ -58,6 +62,9 @@ async def upload_manual(
         for i, (c, vector) in enumerate(zip(chunks, vectors))
     ]
     await upsert_chunks(points)
+    await write_audit("rag.upload", "ok", username=user["username"], client_ip=client_ip(request),
+                      params={"filename": file.filename, "device_id": device_id,
+                              "file_hash": file_hash, "chunks": len(points)})
 
     return {
         "status": "ok",
@@ -76,8 +83,10 @@ async def get_documents():
 
 
 @router.delete("/api/rag/documents/{file_hash}")
-async def remove_document(file_hash: str):
+async def remove_document(file_hash: str, request: Request, user: dict = Depends(require_operator)):
     await delete_document(file_hash)
+    await write_audit("rag.delete", "ok", username=user["username"], client_ip=client_ip(request),
+                      params={"file_hash": file_hash})
     return {"status": "ok", "file_hash": file_hash}
 
 
@@ -86,6 +95,9 @@ class ToggleDocumentRequest(BaseModel):
 
 
 @router.patch("/api/rag/documents/{file_hash}")
-async def toggle_document(file_hash: str, cmd: ToggleDocumentRequest):
+async def toggle_document(file_hash: str, cmd: ToggleDocumentRequest, request: Request,
+                          user: dict = Depends(require_operator)):
     await set_document_enabled(file_hash, cmd.enabled)
+    await write_audit("rag.toggle", "ok", username=user["username"], client_ip=client_ip(request),
+                      params={"file_hash": file_hash, "enabled": cmd.enabled})
     return {"status": "ok", "file_hash": file_hash, "enabled": cmd.enabled}
