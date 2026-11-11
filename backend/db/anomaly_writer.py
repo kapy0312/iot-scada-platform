@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 
 from db.pool import acquire
+from db.trend_writer import link_incident
 
 # 同一事件的新增與更新必須依序執行：第一筆還沒拿到 id 前，第二筆不能又新增一次
 _lock = asyncio.Lock()
@@ -24,6 +25,8 @@ async def _upsert_incident(conn, inc: dict) -> None:
         """, inc["device_id"], inc["started_at"], inc["ended_at"], inc["records"],
             inc["level"], inc["severity"], _json(inc["peak"]), inc["min_score"],
             inc["ai_analysis"], _json(inc["ai_source"]))
+        # 事件剛建立：把剛「到了」的趨勢預警連過來（事前預警；沒有 007 時不做事）
+        await link_incident(conn, inc["device_id"], inc["id"], inc["started_at"])
     else:
         await conn.execute("""
             UPDATE anomaly_incidents

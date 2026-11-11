@@ -74,7 +74,7 @@ INSERT INTO timescaledb_information.jobs VALUES
     (1001, 'policy_retention', 'plc_measurements', '{}');
 INSERT INTO timescaledb_information.job_stats VALUES (1000, NULL), (1001, now());
 
-DROP TABLE IF EXISTS plc_measurements_10s, sync_state, anomaly_incidents;
+DROP TABLE IF EXISTS plc_measurements_10s, sync_state, anomaly_incidents, trend_warnings;
 CREATE TABLE plc_measurements_10s (
     bucket timestamptz, device_id text, tag_name text,
     avg_v double precision, min_v double precision, max_v double precision, samples bigint);
@@ -139,7 +139,7 @@ def run(coro_fn):
                 if await conn.fetchval("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'"):
                     pytest.fail("測試資料庫裝了 timescaledb，看起來是正式資料庫：拒絕執行（會刪表）")
             await local.execute(LOCAL_DDL + _sync_state_ddl())
-            await cloud.execute("DROP TABLE IF EXISTS measurements_10s, anomaly_incidents")
+            await cloud.execute("DROP TABLE IF EXISTS measurements_10s, anomaly_incidents, trend_warnings")
             for stmt in _cloud_ddl():
                 await cloud.execute(stmt)
             await coro_fn(Env(local, cloud))

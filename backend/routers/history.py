@@ -3,6 +3,7 @@ import json
 from fastapi import APIRouter, Query
 
 from db.pool import acquire
+from routers.trend import pre_warnings_of
 
 LEGACY_COLUMNS = ("motor_speed", "temperature", "pressure")
 
@@ -84,7 +85,7 @@ async def get_incidents(
     hours: int = Query(default=24, ge=1, le=720),   # 最多查 30 天
     limit: int = Query(default=200, ge=1, le=1000),
 ):
-    """查詢事件（一次故障一筆）：起訖時間、等級、峰值、最嚴重時刻的診斷與手冊來源"""
+    """查詢事件（一次故障一筆）：起訖時間、等級、峰值、最嚴重時刻的診斷與手冊來源，以及事前的趨勢預警"""
     async with acquire() as conn:
         rows = await conn.fetch("""
             SELECT id, device_id, started_at, ended_at, records, level, severity,
@@ -95,6 +96,7 @@ async def get_incidents(
             ORDER BY started_at DESC
             LIMIT $3
         """, device_id, str(hours), limit)
+        pre = await pre_warnings_of(conn, [r["id"] for r in rows])
 
     incidents = [{
         "id": r["id"],
@@ -109,5 +111,7 @@ async def get_incidents(
         "min_score": r["min_score"],
         "ai_analysis": r["ai_analysis"],
         "ai_source": _json_field(r["ai_source"]),
+        # 事前預警：到警戒（或危險）值之前，趨勢預警提前多久發現；沒有預警時是空清單
+        "pre_warnings": pre.get(r["id"], []),
     } for r in rows]
     return {"device_id": device_id, "hours": hours, "count": len(incidents), "incidents": incidents}

@@ -151,6 +151,11 @@ def test_每秒流程帶趨勢欄位(monkeypatch):
     monkeypatch.setattr(ps.manager, "broadcast", broadcast)
     for name in ("write_to_db", "write_status", "record_anomaly", "_fetch_ollama_analysis"):
         monkeypatch.setattr(ps, name, noop)
+    saved = []
+
+    async def save_trend(ep):
+        saved.append(ep)
+    monkeypatch.setattr(ps, "save_trend", save_trend)
     monkeypatch.setattr(ps.time, "time", lambda: clock["t"])
     prod = {"machine_state": 1, "good_count": 0, "ng_count": 0, "product_id": 1}
 
@@ -166,6 +171,10 @@ def test_每秒流程帶趨勢欄位(monkeypatch):
     assert temp["state"] == FORECAST and temp["target"] == "warning"
     assert 400 <= temp["eta_s"] <= 560        # 第 7 分鐘：約 77 度，剩 8 分鐘
     assert t["tags"]["pressure"]["state"] == STABLE
+    assert t["device_id"] == DEV and ps.latest_trend is t
+    # 預警開始那筆＋之後每 10 秒的更新都會送去寫資料庫
+    assert saved[0]["outcome"] == "ongoing" and saved[0]["tag_name"] == "temperature"
+    assert len(saved) >= 2 and all(e["started_at"] == saved[0]["started_at"] for e in saved)
 
 
 def test_趨緩但終點超過警戒值_仍會預警且時間合理():

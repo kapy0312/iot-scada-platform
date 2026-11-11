@@ -122,6 +122,10 @@ async def cmd_check() -> int:
                 print(f"✅ 可以讀取：oee_hourly {await conn.fetchval('SELECT count(*) FROM oee_hourly')} 筆")
             else:
                 print("（雲端還沒有 oee_hourly：執行 db/cloud/003_oee.sql 後才會同步每小時 OEE）")
+            if await conn.fetchval("SELECT to_regclass('trend_warnings') IS NOT NULL"):
+                print(f"✅ 可以讀取：trend_warnings {await conn.fetchval('SELECT count(*) FROM trend_warnings')} 筆")
+            else:
+                print("（雲端還沒有 trend_warnings：執行 db/cloud/004_trend.sql 後才會同步趨勢預警紀錄）")
             for label, sql in (
                 ("刪除資料", "DELETE FROM measurements_10s WHERE false"),
                 ("改表結構", "ALTER TABLE measurements_10s ADD COLUMN _x int"),

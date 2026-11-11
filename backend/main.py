@@ -11,9 +11,11 @@ from routers.system import router as system_router
 from routers.device import router as device_router
 from routers.auth import router as auth_router
 from routers.oee import router as oee_router
+from routers.trend import router as trend_router
 from core.config import get_database_url, masked
 from core.plc_simulator import start_polling, stop_polling, detector
 from db.pool import close_pool
+from db.trend_writer import close_stale
 from ml.auto_trainer import auto_retrain_loop
 from sync.cloud_sync import syncer
 
@@ -21,6 +23,8 @@ from sync.cloud_sync import syncer
 async def lifespan(app: FastAPI):
     # 設定缺漏直接讓啟動失敗並說明原因；資料庫沒開則不影響啟動（連線池第一次用到才建立）
     print(f"[DB] 連線目標：{masked(get_database_url())}")
+    # 上次沒結束的預警記為 interrupted；放背景跑，資料庫沒開也不擋啟動（新預警至少 5 分鐘後才會出現，不會被誤關）
+    asyncio.create_task(close_stale())
     start_polling()
     task2 = asyncio.create_task(auto_retrain_loop(detector))
     syncer.start()             # .env 沒設 CLOUD_SYNC_ENABLED=true 時只印一行就略過
@@ -56,6 +60,7 @@ app.include_router(rag_router)
 app.include_router(system_router)
 app.include_router(device_router)
 app.include_router(oee_router)
+app.include_router(trend_router)
 
 @app.get("/health")
 async def health():

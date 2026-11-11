@@ -13,6 +13,7 @@ from core.ws_manager import manager
 from db.writer import write_to_db
 from db.anomaly_writer import record_anomaly, save_incident
 from db.status_writer import write_status
+from db.trend_writer import save_trend
 from ml.inferencer import AnomalyDetector
 from ml.ollama_analyzer import analyze_anomaly
 
@@ -213,7 +214,7 @@ async def _process_reading(values: dict, motor_enable: int = 1, production: dict
     AI 診斷在「規格告警」或「ML 異常且有訊號超出正常範圍」時觸發；
     ML 異常但所有訊號都正常時，多半是統計雜訊，只記錄不診斷。
     """
-    global _last_ollama_call, _last_anomaly_at, _latest_ai_analysis, _latest_ai_source, _incident
+    global _last_ollama_call, _last_anomaly_at, _latest_ai_analysis, _latest_ai_source, _incident, latest_trend
     device_id = get_active_device_id()
     now = time.time()
     at = datetime.now(timezone.utc)
@@ -269,13 +270,14 @@ async def _process_reading(values: dict, motor_enable: int = 1, production: dict
     if step.reset:
         print(f"[PLC] {device_id} 生產計數歸零（換班歸零或 PLC 重新下載）")
 
+    trend_snap = latest_trend = {**trend.snapshot(gate["status"]), "device_id": device_id}
     data = {
         "timestamp": now,
         **values,              # 頂層保留各訊號欄位，相容舊前端
         "values": values,      # 新前端讀這個
         "motor_enable": motor_enable,
         "anomaly": anomaly,
-        "trend": trend.snapshot(gate["status"]),
+        "trend": trend_snap,
         "production": {
             "state": machine_state,
             "state_text": STATE_TEXT.get(machine_state) if machine_state is not None else None,
@@ -304,12 +306,14 @@ async def _process_reading(values: dict, motor_enable: int = 1, production: dict
 
 
 _trend_logged: dict[str, float] = {}   # 每個訊號上次印預估時間的時間，預警中每分鐘印一次
+latest_trend: dict | None = None        # 最近一秒的預警狀態（GET /api/trend/current）
 
 
 def _handle_trend_events(events: list[dict]):
-    """預警開始／結束印在 log，預警中每分鐘印一次最新預估；寫入 trend_warnings 在 B 包加上"""
+    """預警開始、每 10 秒更新、結束都寫進 trend_warnings；log 只印開始、結束，以及每分鐘一次最新預估"""
     for e in events:
         ep = e["episode"]
+        asyncio.create_task(save_trend(ep))
         name = f"{ep['device_id']} {ep['tag_name']}"
         line = "警戒" if ep["target_level"] == "warning" else "危險"
         if e["type"] == "start":
@@ -321,7 +325,7 @@ def _handle_trend_events(events: list[dict]):
             snap = trend.tags.get(ep["tag_name"])
             eta = snap.last.get("eta_s") if snap else None
             if eta is not None:
-                print(f"[TREND] {name} 預估 {eta // 60} 分 {eta % 60} 秒後達{line}值（目前 {ep['value_at_end']}，"
+                print(f"[TREND] {name} 預估 {eta // 60} 分 {eta % 60} 秒後達{line}值（目前 {ep['value_at_end']:.2f}，"
                       f"每分鐘 +{ep['slope_per_min']}）")
         elif e["type"] == "end":
             _trend_logged.pop(name, None)

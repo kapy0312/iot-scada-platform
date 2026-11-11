@@ -1,5 +1,5 @@
 """
-雲端同步：把本地的 10 秒彙整、事件表、每小時 OEE 送到 Tiger Cloud
+雲端同步：把本地的 10 秒彙整、事件表、每小時 OEE、趨勢預警紀錄送到 Tiger Cloud
 
 類比：像 PLC 用「已傳送到第幾筆」的指標做資料轉送——
 - watermark 是指標：它之前的資料都已確認送到雲端
@@ -15,6 +15,8 @@
 - 每輪往回多送 15 分鐘（事件表 2 分鐘、每小時 OEE 2 小時），晚到資料讓彙整重算時，修正後的值會再送一次
 每小時 OEE（需要本地 migration 006 與雲端 003_oee.sql，任一邊沒有就略過、不影響其他兩個）：
 - 只送「整小時已整理完」的資料；送的時候把當時的品號標準週期一起帶上，雲端自己就能算表現率
+趨勢預警紀錄（需要本地 migration 007 與雲端 004_trend.sql，任一邊沒有就略過）：
+- 跟事件表同一套：依 updated_at 送，往回重疊 2 分鐘，雲端只用較新的版本覆蓋
 
 設定（.env）：
 - CLOUD_SYNC_ENABLED=true 才會啟動
@@ -36,13 +38,15 @@ CAGG_NAME = "plc_measurements_10s"
 T_MEAS = "measurements_10s"
 T_INC = "anomaly_incidents"
 T_OEE = "oee_hourly"
-TARGETS = (T_MEAS, T_INC, T_OEE)
+T_TREND = "trend_warnings"
+TARGETS = (T_MEAS, T_INC, T_OEE, T_TREND)
 
 OEE_CAGG = "oee_hourly"
 HOUR = timedelta(hours=1)
 OEE_MAX_WINDOW = timedelta(days=7)    # 每小時一筆，一批可以送比較長的時間
 
-OVERLAP = {T_MEAS: timedelta(minutes=15), T_INC: timedelta(minutes=2), T_OEE: timedelta(hours=2)}
+OVERLAP = {T_MEAS: timedelta(minutes=15), T_INC: timedelta(minutes=2), T_OEE: timedelta(hours=2),
+           T_TREND: timedelta(minutes=2)}
 MAX_WINDOW = timedelta(hours=6)       # 彙整每輪最多送幾小時（斷線很久時分批追）
 INC_BATCH = 2000                      # 事件表每輪最多幾筆
 INC_SETTLE = timedelta(seconds=5)     # 事件表只送 5 秒前更新的列，避免還在寫入中的交易被跳過
@@ -59,6 +63,9 @@ OEE_COLS = ["bucket", "device_id", "product_id", "run_s", "idle_s", "fault_s", "
             "planned_stop_s", "data_s", "unknown_s", "good", "ng", "samples", "ideal_cycle_s", "ideal_s"]
 INC_COLS = ["id", "device_id", "started_at", "ended_at", "records", "level", "severity",
             "peak", "min_score", "ai_analysis", "ai_source", "updated_at"]
+TREND_COLS = ["id", "device_id", "tag_name", "target_level", "threshold", "started_at", "ended_at",
+              "first_eta_s", "min_eta_s", "slope_per_min", "value_at_start", "value_at_end",
+              "outcome", "reached_at", "incident_id", "updated_at"]
 
 
 def exclude_patterns() -> list[str]:
@@ -193,6 +200,26 @@ async def upsert_oee(cloud, rows: list) -> None:
         """)
 
 
+async def upsert_trend(cloud, rows: list) -> None:
+    async with cloud.transaction():
+        await cloud.execute("""
+            CREATE TEMP TABLE IF NOT EXISTS _in_trend (
+                id bigint, device_id text, tag_name text, target_level text, threshold double precision,
+                started_at timestamptz, ended_at timestamptz, first_eta_s integer, min_eta_s integer,
+                slope_per_min double precision, value_at_start double precision, value_at_end double precision,
+                outcome text, reached_at timestamptz, incident_id bigint, updated_at timestamptz
+            ) ON COMMIT DELETE ROWS
+        """)
+        await cloud.copy_records_to_table("_in_trend", records=rows, columns=TREND_COLS)
+        sets = ", ".join(f"{c} = EXCLUDED.{c}" for c in TREND_COLS if c != "id")
+        await cloud.execute(f"""
+            INSERT INTO trend_warnings ({", ".join(TREND_COLS)})
+            SELECT {", ".join(TREND_COLS)} FROM _in_trend
+            ON CONFLICT (id) DO UPDATE SET {sets}, synced_at = now()
+            WHERE trend_warnings.updated_at <= EXCLUDED.updated_at
+        """)
+
+
 # ---------- 一批 ----------
 
 async def sync_measurements_once(local, cloud, max_window: timedelta = MAX_WINDOW) -> tuple[int, bool]:
@@ -251,6 +278,50 @@ async def sync_incidents_once(local, cloud, batch: int = INC_BATCH) -> tuple[int
     new_wm = max(wm, records[-1][INC_COLS.index("updated_at")]) if more else upper
     await set_watermark(local, T_INC, new_wm, len(records))
     return len(records), more
+
+
+async def sync_trend_once(local, cloud, batch: int = INC_BATCH) -> tuple[int, bool]:
+    """跟事件表同一套：依 updated_at 往前推，一批最多 batch 筆"""
+    wm = await get_watermark(local, T_TREND) or EPOCH
+    upper = await local.fetchval("SELECT now() - $1::interval", INC_SETTLE)
+    if upper <= wm:
+        return 0, False
+    rows = await local.fetch(f"""
+        SELECT {", ".join(TREND_COLS)} FROM trend_warnings
+        WHERE updated_at >= $1 AND updated_at < $2 AND NOT (device_id LIKE ANY($3::text[]))
+        ORDER BY updated_at, id
+        LIMIT $4
+    """, wm - OVERLAP[T_TREND], upper, exclude_patterns(), batch)
+    records = [tuple(r) for r in rows]
+    if records:
+        await upsert_trend(cloud, records)
+    more = len(records) == batch
+    new_wm = max(wm, records[-1][TREND_COLS.index("updated_at")]) if more else upper
+    await set_watermark(local, T_TREND, new_wm, len(records))
+    return len(records), more
+
+
+_skip_reason: dict[str, str | None] = {}
+
+
+async def table_ready(local, cloud, target: str, local_tables: tuple[str, ...], local_hint: str,
+                      cloud_hint: str) -> bool:
+    """本地、雲端都有表才同步這個目標；缺一邊就略過（原因改變時才提醒一次），不影響其他目標"""
+    reason = None
+    checks = " AND ".join(f"to_regclass('{t}') IS NOT NULL" for t in local_tables)
+    if not await local.fetchval(f"SELECT {checks}"):
+        reason = local_hint
+    elif not await cloud.fetchval(f"SELECT to_regclass('{target}') IS NOT NULL"):
+        reason = cloud_hint
+    if reason and reason != _skip_reason.get(target):
+        print(f"[SYNC] {target} 先不同步：{reason}")
+    _skip_reason[target] = reason
+    return reason is None
+
+
+async def trend_ready(local, cloud) -> bool:
+    return await table_ready(local, cloud, T_TREND, ("trend_warnings",),
+                             "本地還沒執行 migration 007", "雲端還沒執行 db/cloud/004_trend.sql")
 
 
 _oee_skip_reason: str | None = None
@@ -325,6 +396,8 @@ async def sync_cycle(local, cloud) -> dict | None:
         plan = [(T_MEAS, sync_measurements_once), (T_INC, sync_incidents_once)]
         if await oee_ready(local, cloud):
             plan.append((T_OEE, sync_oee_once))
+        if await trend_ready(local, cloud):
+            plan.append((T_TREND, sync_trend_once))
         for target, fn in plan:
             total = 0
             for _ in range(MAX_BATCHES_PER_CYCLE):
