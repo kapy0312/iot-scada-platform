@@ -320,3 +320,16 @@ def test_換班別那天重疊的新班不列():
     assert is_effective(pick, three[2], date(2026, 11, 12)) is False    # 被舊制晚班蓋掉
     assert is_effective(pick, three[0], date(2026, 11, 12)) is True
     assert is_effective(pick, three[2], date(2026, 11, 13)) is True
+
+
+def test_跨來源的PUT請求不會被CORS擋下():
+    """前端（3000）與後端（8000）不同 port：瀏覽器送 PUT 前會先問後端允不允許，沒列 PUT 就整個被擋"""
+    from fastapi.testclient import TestClient
+
+    import main
+    r = TestClient(main.app).options("/api/oee/products", headers={
+        "Origin": "http://localhost:3000",
+        "Access-Control-Request-Method": "PUT",
+        "Access-Control-Request-Headers": "content-type,x-scada-request",
+    })
+    assert r.status_code == 200 and "PUT" in r.headers["access-control-allow-methods"]

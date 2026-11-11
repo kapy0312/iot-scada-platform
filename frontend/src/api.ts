@@ -211,3 +211,122 @@ export async function getIncidents(deviceId: string, hours: number): Promise<Inc
   const data = await res.json();
   return (data.incidents ?? []) as Incident[];
 }
+
+// ---------- OEE ----------
+
+/** 一段時間（一班或一小時）的 OEE；算不出來的指標是 null（例如沒有產量就沒有良率） */
+export interface OeeSummary {
+  oee: number | null;
+  availability: number | null;
+  performance: number | null;
+  quality: number | null;
+  coverage: number | null;            // 資料覆蓋率：有資料秒 ÷ 這段時間的總秒數
+  good: number;
+  ng: number;
+  total: number;
+  run_s: number;
+  idle_s: number;
+  fault_s: number;
+  changeover_s: number;
+  planned_stop_s: number;
+  data_s: number;
+  window_s: number;
+  losses: { fault_s: number; changeover_s: number; idle_s: number };
+  missing_products: number[];
+  flags: string[];                    // low_coverage / performance_over_100 / missing_product_spec / no_state
+}
+
+export interface OeeHour extends OeeSummary {
+  hour: string;
+}
+
+export interface OeeShift extends OeeSummary {
+  shift: string;
+  day: string;
+  start: string;
+  end: string;
+  in_progress: boolean;
+  hourly?: OeeHour[];
+}
+
+export interface MachineState {
+  state: number | null;               // 0=計畫停機 1=運轉 2=待機 3=故障 4=換模
+  state_text: string | null;
+  since: string | null;
+  duration_s?: number;
+  updated_at: string;
+  product_id: number | null;
+  good_total: number | null;
+  ng_total: number | null;
+}
+
+export interface OeeCurrent {
+  device_id: string;
+  now: string;
+  state: MachineState | null;
+  shift: OeeShift | null;             // null：現在不在任何班別
+}
+
+export interface StateSegment {
+  state: number | null;
+  state_text: string | null;
+  start: string;
+  end: string;
+  seconds: number;
+}
+
+export interface ShiftDef {
+  name: string;
+  start_hour: number;
+  end_hour: number;
+}
+
+export interface ProductSpec {
+  product_id: number;
+  name: string;
+  ideal_cycle_s: number;
+  updated_at?: string;
+  updated_by?: string | null;
+}
+
+export interface OeeConfig {
+  timezone: string;
+  products: ProductSpec[];
+  shifts: { effective_from: string; shifts: ShiftDef[] } | null;
+  upcoming_shifts: Array<{ effective_from: string; shifts: ShiftDef[] }>;
+}
+
+const dev = (deviceId: string) => `device_id=${encodeURIComponent(deviceId)}`;
+
+export async function getOeeCurrent(deviceId: string): Promise<OeeCurrent> {
+  return (await ensureOk(await apiFetch(`/api/oee/current?${dev(deviceId)}`))).json();
+}
+
+export async function getOeeShifts(deviceId: string, days = 7): Promise<OeeShift[]> {
+  const res = await ensureOk(await apiFetch(`/api/oee/shifts?${dev(deviceId)}&days=${days}`));
+  return (await res.json()).shifts as OeeShift[];
+}
+
+export async function getOeeTimeline(deviceId: string): Promise<{ start: string; end: string; segments: StateSegment[] }> {
+  return (await ensureOk(await apiFetch(`/api/oee/timeline?${dev(deviceId)}`))).json();
+}
+
+export async function getOeeConfig(): Promise<OeeConfig> {
+  return (await ensureOk(await apiFetch("/api/oee/config"))).json();
+}
+
+export async function saveProducts(products: ProductSpec[]): Promise<void> {
+  await ensureOk(await apiFetch("/api/oee/products", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(products.map(({ product_id, name, ideal_cycle_s }) => ({ product_id, name, ideal_cycle_s }))),
+  }));
+}
+
+export async function saveShifts(effectiveFrom: string | null, shifts: ShiftDef[]): Promise<void> {
+  await ensureOk(await apiFetch("/api/oee/shifts", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ effective_from: effectiveFrom || null, shifts }),
+  }));
+}

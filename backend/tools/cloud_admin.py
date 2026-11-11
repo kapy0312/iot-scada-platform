@@ -118,6 +118,10 @@ async def cmd_check() -> int:
             n = await conn.fetchval("SELECT count(*) FROM measurements_10s")
             m = await conn.fetchval("SELECT count(*) FROM anomaly_incidents")
             print(f"✅ 可以讀取：measurements_10s {n} 筆、anomaly_incidents {m} 筆")
+            if await conn.fetchval("SELECT to_regclass('oee_hourly') IS NOT NULL"):
+                print(f"✅ 可以讀取：oee_hourly {await conn.fetchval('SELECT count(*) FROM oee_hourly')} 筆")
+            else:
+                print("（雲端還沒有 oee_hourly：執行 db/cloud/003_oee.sql 後才會同步每小時 OEE）")
             for label, sql in (
                 ("刪除資料", "DELETE FROM measurements_10s WHERE false"),
                 ("改表結構", "ALTER TABLE measurements_10s ADD COLUMN _x int"),

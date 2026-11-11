@@ -18,10 +18,15 @@ import EventLog from "./components/EventLog";
 import RagPanel from "./components/RagPanel";
 import SystemSettings from "./components/SystemSettings";
 import LoginDialog from "./components/LoginDialog";
+import OeeCard from "./components/OeeCard";
+import ProductionPanel from "./components/ProductionPanel";
+import OeeSettings from "./components/OeeSettings";
+import { useOeeCurrent } from "./hooks/useOee";
 
-type Tab = "monitor" | "manuals" | "settings";
+type Tab = "monitor" | "production" | "manuals" | "settings";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "monitor", label: "監控" },
+  { id: "production", label: "生產" },
   { id: "manuals", label: "手冊管理" },
   { id: "settings", label: "系統設定" },
 ];
@@ -38,6 +43,8 @@ export default function App() {
     data?.device_id ?? (data?.source === "mock" ? "S7-1511T-MOCK" : "S7-1511T");
   const { profile, threshold, fromServer } = useDeviceProfile(deviceId);
   const alarms = useAlarms(data, profile, threshold);
+  const liveState = data?.production?.state;
+  const oee = useOeeCurrent(deviceId, liveState);
 
   // 保留最近一次 AI 診斷，異常結束後畫面仍看得到
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
@@ -99,6 +106,12 @@ export default function App() {
                 />
               </div>
               <div className="col-side">
+                <OeeCard
+                  data={oee.data}
+                  error={oee.error}
+                  liveState={liveState}
+                  onOpenDetail={() => setTab("production")}
+                />
                 <AlarmPanel
                   data={data}
                   alarms={alarms}
@@ -124,15 +137,22 @@ export default function App() {
           </>
         )}
 
+        {tab === "production" && (
+          <ProductionPanel deviceId={deviceId} current={oee.data} error={oee.error} />
+        )}
+
         {tab === "manuals" && <RagPanel />}
 
         {tab === "settings" && (
-          <SystemSettings
-            historyCount={history.length}
-            threshold={threshold}
-            profileFromServer={fromServer}
-            lastUpdate={data?.timestamp}
-          />
+          <>
+            <SystemSettings
+              historyCount={history.length}
+              threshold={threshold}
+              profileFromServer={fromServer}
+              lastUpdate={data?.timestamp}
+            />
+            <OeeSettings canOperate={auth.user !== null} onRequireLogin={auth.openDialog} />
+          </>
         )}
       </main>
 

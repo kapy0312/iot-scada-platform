@@ -44,7 +44,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],   # PUT：OEE 品號、班別設定
     allow_headers=["Content-Type", "X-SCADA-Request"],
 )
 

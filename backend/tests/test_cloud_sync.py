@@ -340,3 +340,119 @@ def test_錯誤訊息看得懂():
     assert "逾時" in cs.describe_error(TimeoutError())
     assert "密碼" in cs.describe_error(asyncpg.InvalidPasswordError("x"))
     assert cs.describe_error(ValueError("壞掉")) == "ValueError: 壞掉"
+
+
+# ---------- 每小時 OEE ----------
+
+H = timedelta(hours=1)
+
+OEE_LOCAL_DDL = """
+DROP TABLE IF EXISTS oee_hourly, product_specs;
+CREATE TABLE oee_hourly (
+    bucket timestamptz, device_id text, product_id integer,
+    run_s real, idle_s real, fault_s real, changeover_s real, planned_stop_s real,
+    data_s real, unknown_s real, good bigint, ng bigint, samples bigint);
+INSERT INTO timescaledb_information.continuous_aggregates VALUES ('oee_hourly', '_materialized_hypertable_12');
+INSERT INTO timescaledb_information.jobs VALUES
+    (1002, 'policy_refresh_continuous_aggregate', 'oee_hourly', '{"end_offset": "00:01:00", "start_offset": "04:00:00"}');
+INSERT INTO timescaledb_information.job_stats VALUES (1002, NULL);
+"""
+
+
+def _product_specs_ddl() -> list[str]:
+    """migration 006 裡建品號表、放預設品號的兩句"""
+    sql = (BACKEND / "db/migrations/006_oee.sql").read_text(encoding="utf-8")
+    a = sql.index("CREATE TABLE IF NOT EXISTS product_specs")
+    b = sql.index("ON CONFLICT (product_id) DO NOTHING;") + len("ON CONFLICT (product_id) DO NOTHING;")
+    return [s for s in sql[a:b].split(";") if s.strip()]
+
+
+def _cloud_oee_ddl() -> list[str]:
+    """雲端 003 的建表語句（測試資料庫沒有 edge_writer 帳號，略過 GRANT 與確認查詢）"""
+    sql = (BACKEND / "db/cloud/003_oee.sql").read_text(encoding="utf-8")
+    out = []
+    for raw in sql.split(";"):
+        body = "\n".join(l for l in raw.splitlines() if not l.strip().startswith("--")).strip()
+        if body and not body.upper().startswith(("GRANT", "SELECT")):
+            out.append(body)
+    return out
+
+
+async def _oee_setup(env, cloud_table=True):
+    await env.local.execute(OEE_LOCAL_DDL)
+    for s in _product_specs_ddl():
+        await env.local.execute(s)
+    await env.cloud.execute("DROP TABLE IF EXISTS oee_hourly")
+    if cloud_table:
+        for s in _cloud_oee_ddl():
+            await env.cloud.execute(s)
+
+
+async def _oee_refreshed_until(env, t):
+    await env.local.execute("UPDATE timescaledb_information.job_stats SET last_successful_finish = $1 "
+                            "WHERE job_id = 1002", t + timedelta(minutes=1))
+
+
+async def _add_hours(env, device, start, n, product=1, good=500, ng=5):
+    rows = [(start + i * H, device, product, 3000.0, 600.0, 0.0, 0.0, 0.0, 3600.0, 0.0, good, ng, 3600)
+            for i in range(n)]
+    await env.local.executemany("INSERT INTO oee_hourly VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)", rows)
+
+
+@needs_db
+def test_OEE_只送整小時已整理完的_帶上標準週期_排除MOCK():
+    async def body(env):
+        await _oee_setup(env)
+        await _add_hours(env, "S7-1511T-SIM", T0, 5)
+        await _add_hours(env, "S7-1511T-MOCK", T0, 5)
+        await _add_hours(env, "S7-1511T-SIM", T0 + 2 * H, 1, product=9)      # 沒設定標準週期的品號
+        await _oee_refreshed_until(env, T0 + 3 * H + 30 * S * 6)             # 整理到 03:03 → 00～02 點完整
+        sent = await cs.sync_cycle(env.local, env.cloud)
+        assert sent[cs.T_OEE] == 4
+        rows = await env.cloud.fetch("SELECT * FROM oee_hourly ORDER BY bucket, product_id")
+        assert {r["device_id"] for r in rows} == {"S7-1511T-SIM"}
+        assert max(r["bucket"] for r in rows) == T0 + 2 * H
+        r0 = rows[0]
+        assert (r0["ideal_cycle_s"], r0["ideal_s"], r0["good"], r0["run_s"]) == (6.0, 505 * 6.0, 500, 3000.0)
+        r9 = [r for r in rows if r["product_id"] == 9][0]
+        assert r9["ideal_cycle_s"] is None and r9["ideal_s"] is None
+        assert await env.wm(cs.T_OEE) == T0 + 3 * H
+    run(body)
+
+
+@needs_db
+def test_OEE_重送不重複_改標準週期後重送會更新():
+    async def body(env):
+        await _oee_setup(env)
+        await _add_hours(env, "S7-1511T-SIM", T0, 3)
+        await _oee_refreshed_until(env, T0 + 3 * H)
+        await cs.sync_cycle(env.local, env.cloud)
+        await env.local.execute("UPDATE product_specs SET ideal_cycle_s = 5 WHERE product_id = 1")
+        await env.local.execute("UPDATE oee_hourly SET good = 510 WHERE bucket = $1", T0 + 2 * H)  # 晚到資料重算
+        await cs.sync_cycle(env.local, env.cloud)                            # 沒有新的整小時：不送
+        assert await env.cloud.fetchval("SELECT good FROM oee_hourly WHERE bucket = $1", T0 + 2 * H) == 500
+        await _add_hours(env, "S7-1511T-SIM", T0 + 3 * H, 1)
+        await _oee_refreshed_until(env, T0 + 4 * H)
+        await cs.sync_cycle(env.local, env.cloud)                            # 新的一小時好了，往回重疊 2 小時重送
+        rows = await env.cloud.fetch("SELECT bucket, good, ideal_cycle_s FROM oee_hourly ORDER BY bucket")
+        assert len(rows) == 4                                                # 重送不會變兩筆
+        assert [(r["good"], r["ideal_cycle_s"]) for r in rows] == [(500, 6.0), (500, 5.0), (510, 5.0), (500, 5.0)]
+    run(body)
+
+
+@needs_db
+def test_OEE_雲端沒有表就略過_其他目標照常():
+    async def body(env):
+        await _oee_setup(env, cloud_table=False)
+        await _add_hours(env, "S7-1511T-SIM", T0, 3)
+        await _oee_refreshed_until(env, T0 + 3 * H)
+        await env.add_buckets("S7-1511T-SIM", T0, 6)
+        await env.refreshed_until(T0 + 60 * S)
+        sent = await cs.sync_cycle(env.local, env.cloud)
+        assert cs.T_OEE not in sent and sent[cs.T_MEAS] == 12
+        assert await env.wm(cs.T_OEE) is None
+    run(body)
+
+
+def test_取整到1小時():
+    assert cs.floor_bucket(T0 + 95 * 60 * S, cs.HOUR) == T0 + H

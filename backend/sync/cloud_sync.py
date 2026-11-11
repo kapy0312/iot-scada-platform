@@ -1,5 +1,5 @@
 """
-雲端同步：把本地的 10 秒彙整與事件表送到 Tiger Cloud
+雲端同步：把本地的 10 秒彙整、事件表、每小時 OEE 送到 Tiger Cloud
 
 類比：像 PLC 用「已傳送到第幾筆」的指標做資料轉送——
 - watermark 是指標：它之前的資料都已確認送到雲端
@@ -12,7 +12,9 @@
 不重複：
 - 雲端已 commit、本地指標還沒更新就斷電 → 下一輪重送同一段，upsert 只會覆蓋成相同的值
 晚到的資料：
-- 每輪往回多送 15 分鐘（事件表 2 分鐘），晚到資料讓彙整重算時，修正後的值會再送一次
+- 每輪往回多送 15 分鐘（事件表 2 分鐘、每小時 OEE 2 小時），晚到資料讓彙整重算時，修正後的值會再送一次
+每小時 OEE（需要本地 migration 006 與雲端 003_oee.sql，任一邊沒有就略過、不影響其他兩個）：
+- 只送「整小時已整理完」的資料；送的時候把當時的品號標準週期一起帶上，雲端自己就能算表現率
 
 設定（.env）：
 - CLOUD_SYNC_ENABLED=true 才會啟動
@@ -33,9 +35,14 @@ CAGG_NAME = "plc_measurements_10s"
 
 T_MEAS = "measurements_10s"
 T_INC = "anomaly_incidents"
-TARGETS = (T_MEAS, T_INC)
+T_OEE = "oee_hourly"
+TARGETS = (T_MEAS, T_INC, T_OEE)
 
-OVERLAP = {T_MEAS: timedelta(minutes=15), T_INC: timedelta(minutes=2)}
+OEE_CAGG = "oee_hourly"
+HOUR = timedelta(hours=1)
+OEE_MAX_WINDOW = timedelta(days=7)    # 每小時一筆，一批可以送比較長的時間
+
+OVERLAP = {T_MEAS: timedelta(minutes=15), T_INC: timedelta(minutes=2), T_OEE: timedelta(hours=2)}
 MAX_WINDOW = timedelta(hours=6)       # 彙整每輪最多送幾小時（斷線很久時分批追）
 INC_BATCH = 2000                      # 事件表每輪最多幾筆
 INC_SETTLE = timedelta(seconds=5)     # 事件表只送 5 秒前更新的列，避免還在寫入中的交易被跳過
@@ -48,6 +55,8 @@ CONNECT_TIMEOUT = 15
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 MEAS_COLS = ["bucket", "device_id", "tag_name", "avg_v", "min_v", "max_v", "samples"]
+OEE_COLS = ["bucket", "device_id", "product_id", "run_s", "idle_s", "fault_s", "changeover_s",
+            "planned_stop_s", "data_s", "unknown_s", "good", "ng", "samples", "ideal_cycle_s", "ideal_s"]
 INC_COLS = ["id", "device_id", "started_at", "ended_at", "records", "level", "severity",
             "peak", "min_score", "ai_analysis", "ai_source", "updated_at"]
 
@@ -60,10 +69,10 @@ def exclude_patterns() -> list[str]:
 
 # ---------- 純計算（不碰資料庫，方便測試） ----------
 
-def floor_bucket(t: datetime) -> datetime:
-    """往前取整到 10 秒：12:00:15 → 12:00:10"""
+def floor_bucket(t: datetime, step: timedelta = BUCKET) -> datetime:
+    """往前取整：預設 10 秒（12:00:15 → 12:00:10）；每小時 OEE 用 1 小時（12:35 → 12:00）"""
     secs = (t - EPOCH).total_seconds()
-    return EPOCH + timedelta(seconds=(secs // BUCKET.total_seconds()) * BUCKET.total_seconds())
+    return EPOCH + timedelta(seconds=(secs // step.total_seconds()) * step.total_seconds())
 
 
 def plan_window(watermark: datetime, upper: datetime | None, overlap: timedelta,
@@ -82,9 +91,9 @@ def plan_window(watermark: datetime, upper: datetime | None, overlap: timedelta,
 
 # ---------- 本地端 ----------
 
-async def refresh_upper(local) -> datetime | None:
+async def refresh_upper(local, cagg: str = CAGG_NAME, step: timedelta = BUCKET) -> datetime | None:
     """
-    本地彙整「確定整理好」到哪裡：自動整理工作最後一次成功的時間 − end_offset，再取整到 10 秒
+    本地彙整「確定整理好」到哪裡：自動整理工作最後一次成功的時間 − end_offset，再取整到 bucket 大小
     還沒成功跑過（剛建好、TimescaleDB 背景工作沒開）→ None，這一輪不送彙整
     TimescaleDB 2.31 起 jobs.hypertable_name 改成顯示彙整名稱，舊版是內部表名稱，兩種都比對
     """
@@ -98,10 +107,10 @@ async def refresh_upper(local) -> datetime | None:
         WHERE ca.view_name = $1
         ORDER BY js.last_successful_finish DESC NULLS LAST
         LIMIT 1
-    """, CAGG_NAME)
+    """, cagg)
     if row is None or row["last_successful_finish"] is None:
         return None
-    return floor_bucket(row["last_successful_finish"] - row["end_offset"])
+    return floor_bucket(row["last_successful_finish"] - row["end_offset"], step)
 
 
 async def get_watermark(local, target: str) -> datetime | None:
@@ -161,6 +170,26 @@ async def upsert_incidents(cloud, rows: list) -> None:
             SELECT {", ".join(INC_COLS)} FROM _in_inc
             ON CONFLICT (id) DO UPDATE SET {sets}, synced_at = now()
             WHERE anomaly_incidents.updated_at <= EXCLUDED.updated_at
+        """)
+
+
+async def upsert_oee(cloud, rows: list) -> None:
+    async with cloud.transaction():
+        await cloud.execute("""
+            CREATE TEMP TABLE IF NOT EXISTS _in_oee (
+                bucket timestamptz, device_id text, product_id integer,
+                run_s double precision, idle_s double precision, fault_s double precision,
+                changeover_s double precision, planned_stop_s double precision, data_s double precision,
+                unknown_s double precision, good bigint, ng bigint, samples integer,
+                ideal_cycle_s double precision, ideal_s double precision
+            ) ON COMMIT DELETE ROWS
+        """)
+        await cloud.copy_records_to_table("_in_oee", records=rows, columns=OEE_COLS)
+        sets = ", ".join(f"{c} = EXCLUDED.{c}" for c in OEE_COLS if c not in ("bucket", "device_id", "product_id"))
+        await cloud.execute(f"""
+            INSERT INTO oee_hourly ({", ".join(OEE_COLS)})
+            SELECT {", ".join(OEE_COLS)} FROM _in_oee
+            ON CONFLICT (device_id, product_id, bucket) DO UPDATE SET {sets}, synced_at = now()
         """)
 
 
@@ -224,18 +253,79 @@ async def sync_incidents_once(local, cloud, batch: int = INC_BATCH) -> tuple[int
     return len(records), more
 
 
+_oee_skip_reason: str | None = None
+
+
+async def oee_ready(local, cloud) -> bool:
+    """本地有 006、雲端有 003_oee 才同步每小時 OEE；缺一邊就略過（只提醒一次），不影響其他目標"""
+    global _oee_skip_reason
+    reason = None
+    if not await local.fetchval("SELECT to_regclass('oee_hourly') IS NOT NULL AND to_regclass('product_specs') IS NOT NULL"):
+        reason = "本地還沒執行 migration 006"
+    elif not await cloud.fetchval("SELECT to_regclass('oee_hourly') IS NOT NULL"):
+        reason = "雲端還沒執行 db/cloud/003_oee.sql"
+    if reason and reason != _oee_skip_reason:
+        print(f"[SYNC] 每小時 OEE 先不同步：{reason}")
+    _oee_skip_reason = reason
+    return reason is None
+
+
+async def sync_oee_once(local, cloud, max_window: timedelta = OEE_MAX_WINDOW) -> tuple[int, bool]:
+    """送一批每小時 OEE（只送整小時已整理完的）；回傳 (筆數, 是否還有沒追上的)"""
+    wm = await get_watermark(local, T_OEE)
+    if wm is None:
+        first = await local.fetchval(
+            f"SELECT min(bucket) FROM {OEE_CAGG} WHERE NOT (device_id LIKE ANY($1::text[]))", exclude_patterns())
+        if first is None:
+            return 0, False
+        wm = first
+    upper = await refresh_upper(local, OEE_CAGG, HOUR)
+    window = plan_window(wm, upper, OVERLAP[T_OEE], max_window)
+    if window is None:
+        return 0, False
+    start, end = window
+    # product_id 為 NULL（舊版 PLC 程式）送成 0：雲端主鍵不能有 NULL
+    rows = await local.fetch(f"""
+        SELECT h.bucket, h.device_id, COALESCE(h.product_id, 0),
+               COALESCE(h.run_s, 0)::float8, COALESCE(h.idle_s, 0)::float8, COALESCE(h.fault_s, 0)::float8,
+               COALESCE(h.changeover_s, 0)::float8, COALESCE(h.planned_stop_s, 0)::float8,
+               COALESCE(h.data_s, 0)::float8, COALESCE(h.unknown_s, 0)::float8,
+               COALESCE(h.good, 0)::bigint, COALESCE(h.ng, 0)::bigint, h.samples::int,
+               p.ideal_cycle_s::float8,
+               ((COALESCE(h.good, 0) + COALESCE(h.ng, 0)) * p.ideal_cycle_s)::float8
+        FROM {OEE_CAGG} h
+        LEFT JOIN product_specs p ON p.product_id = h.product_id
+        WHERE h.bucket >= $1 AND h.bucket < $2 AND NOT (h.device_id LIKE ANY($3::text[]))
+        ORDER BY h.bucket
+    """, start, end, exclude_patterns())
+    records = [tuple(r) for r in rows]
+    if records:
+        await upsert_oee(cloud, records)
+    else:
+        nxt = await local.fetchval(f"""
+            SELECT min(bucket) FROM {OEE_CAGG}
+            WHERE bucket >= $1 AND bucket < $2 AND NOT (device_id LIKE ANY($3::text[]))
+        """, end, upper, exclude_patterns())
+        end = nxt if nxt is not None else upper
+    await set_watermark(local, T_OEE, end, len(records))
+    return len(records), end < upper
+
+
 # 同一時間只能有一個同步在跑：docker 裡的 backend 和本機 uvicorn 同時開著時，第二個會自動略過；
 # tools.sync_admin rewind 也會先拿這把鎖，避免調指標時剛好被同步覆蓋
 LOCK_KEY = 0x5CADA_5C  # 任意固定數字
 
 
 async def sync_cycle(local, cloud) -> dict | None:
-    """一輪：兩個目標各自追到最新（最多 MAX_BATCHES_PER_CYCLE 批）；拿不到鎖回 None"""
+    """一輪：各目標各自追到最新（最多 MAX_BATCHES_PER_CYCLE 批）；拿不到鎖回 None"""
     if not await local.fetchval("SELECT pg_try_advisory_lock($1)", LOCK_KEY):
         return None
     try:
         sent = {}
-        for target, fn in ((T_MEAS, sync_measurements_once), (T_INC, sync_incidents_once)):
+        plan = [(T_MEAS, sync_measurements_once), (T_INC, sync_incidents_once)]
+        if await oee_ready(local, cloud):
+            plan.append((T_OEE, sync_oee_once))
+        for target, fn in plan:
             total = 0
             for _ in range(MAX_BATCHES_PER_CYCLE):
                 n, more = await fn(local, cloud)

@@ -152,7 +152,7 @@ def main() -> int:
     g = r.add_mutually_exclusive_group(required=True)
     g.add_argument("--hours", type=float)
     g.add_argument("--all", action="store_true")
-    r.add_argument("--target", choices=cs.TARGETS, help="只調其中一個；不指定就兩個都調")
+    r.add_argument("--target", choices=cs.TARGETS, help="只調其中一個；不指定就全部都調")
     f = sub.add_parser("refresh")
     f.add_argument("--start", required=True, type=parse_tw, help='台灣時間，例如 "2026-11-01 08:00"')
     f.add_argument("--end", required=True, type=parse_tw)
