@@ -1,0 +1,132 @@
+﻿FUNCTION_BLOCK "FB_Production"
+TITLE = Machine state machine and production counters (OEE)
+{ S7_Optimized_Access := 'TRUE' }
+AUTHOR : Kevin
+VERSION : 0.1
+// 機台狀態機＋良品／NG 計數，給 OEE 用；由 OB30（循環中斷 100 ms）在 FB_MachineSim 之前呼叫
+// 跟 FB_MachineSim 分開：接實機時 FB_MachineSim 整個拿掉，這個 FB 的狀態與計數邏輯仍然需要
+//
+// 狀態代碼（後端 core/production.py 用同一套）：
+//   0=計畫停機 1=運轉 2=待機 3=故障 4=換模
+// 優先順序：故障 > 換模 > 計畫停機 > 運轉（MotorEnable=1）> 待機
+// 故障是拴鎖的：FaultStop 觸發後，要 FaultStop=0 且 FaultReset 出現正緣才解除（排除原因＋按復歸）
+// RunPermit 只有在「運轉」狀態才為 TRUE，接到 FB_MachineSim.Enable：故障、換模、計畫停機時馬達一定停
+
+   VAR_INPUT
+      MotorEnable : Bool;        // 操作員啟動（DB1.motor_enable）
+      PlannedStop : Bool;        // 計畫停機：休息、保養（DB1.planned_stop）
+      ChangeoverReq : Bool;      // 換模中（DB1.changeover_req）
+      FaultStop : Bool;          // 停機故障（DB1.fault_stop）
+      FaultReset : Bool;         // 故障復歸，正緣有效（DB1.fault_reset）
+      CounterReset : Bool;       // 計數歸零，正緣有效（DB1.counter_reset）
+      Speed : Real;              // 目前轉速 RPM（DB1.motor_speed，上一個週期的值）
+      FaultMode : Int;           // 跟 FB_MachineSim 相同的故障模式，用來決定 NG 率
+      CycleTime : Real := 0.1;   // 呼叫週期（秒），要跟 OB30 的循環時間一致
+   END_VAR
+
+   VAR_OUTPUT
+      State : Int;               // 機台狀態（DB1.machine_state）
+      RunPermit : Bool;          // 允許馬達運轉 → FB_MachineSim.Enable
+      GoodCount : DInt;          // 良品累計（DB1.good_count）
+      NgCount : DInt;            // NG 累計（DB1.ng_count）
+   END_VAR
+
+   VAR
+      faultLatched : Bool;
+      faultResetPrev : Bool;
+      counterResetPrev : Bool;
+      statGood : DInt;
+      statNg : DInt;
+      partAcc : Real;            // 這一件做了多少（0～1，滿 1 出一件）
+      seed : UDInt := 54321;
+   END_VAR
+
+   VAR_TEMP
+      ngPermille : Int;          // NG 率（千分比）
+      roll : Int;
+   END_VAR
+
+   VAR CONSTANT
+      ST_PLANNED_STOP : Int := 0;
+      ST_RUN : Int := 1;
+      ST_IDLE : Int := 2;
+      ST_FAULT : Int := 3;
+      ST_CHANGEOVER : Int := 4;
+      RATED_SPEED : Real := 1480.0;   // 額定轉速
+      CYCLE_AT_RATED : Real := 6.0;   // 額定轉速時幾秒出一件（後端品號 1 的標準週期也設 6.0）
+   END_VAR
+
+
+BEGIN
+	// ---------- 1. 故障拴鎖與復歸 ----------
+	IF #FaultStop THEN
+	    #faultLatched := TRUE;
+	ELSIF #FaultReset AND NOT #faultResetPrev THEN
+	    #faultLatched := FALSE;
+	END_IF;
+	#faultResetPrev := #FaultReset;
+
+	// ---------- 2. 狀態判斷（依優先順序） ----------
+	IF #faultLatched THEN
+	    #State := #ST_FAULT;
+	ELSIF #ChangeoverReq THEN
+	    #State := #ST_CHANGEOVER;
+	ELSIF #PlannedStop THEN
+	    #State := #ST_PLANNED_STOP;
+	ELSIF #MotorEnable THEN
+	    #State := #ST_RUN;
+	ELSE
+	    #State := #ST_IDLE;
+	END_IF;
+	#RunPermit := #State = #ST_RUN;
+
+	// ---------- 3. 計數歸零（正緣） ----------
+	IF #CounterReset AND NOT #counterResetPrev THEN
+	    #statGood := 0;
+	    #statNg := 0;
+	    #partAcc := 0.0;
+	END_IF;
+	#counterResetPrev := #CounterReset;
+
+	// ---------- 4. 產量：只有運轉狀態才累加，轉速越低做得越慢 ----------
+	IF #State = #ST_RUN THEN
+	    #partAcc := #partAcc + #CycleTime * MAX(IN1 := 0.0, IN2 := #Speed) / #RATED_SPEED / #CYCLE_AT_RATED;
+	END_IF;
+
+	IF #partAcc >= 1.0 THEN
+	    #partAcc := #partAcc - 1.0;
+
+	    // NG 率跟著故障模式變（千分比）：正常 1%、背壓 3%、冷卻風扇 2%、負載降低 3%、軸承磨損 5%、卡滯 10%
+	    CASE #FaultMode OF
+	        1: #ngPermille := 30;
+	        2: #ngPermille := 20;
+	        3: #ngPermille := 30;
+	        4: #ngPermille := 50;
+	        5: #ngPermille := 100;
+	    ELSE
+	        #ngPermille := 10;
+	    END_CASE;
+
+	    #seed := (#seed * UDINT#75 + UDINT#74) MOD UDINT#65537;
+	    #roll := UDINT_TO_INT(#seed MOD UDINT#1000);
+	    IF #roll < #ngPermille THEN
+	        #statNg := #statNg + 1;
+	    ELSE
+	        #statGood := #statGood + 1;
+	    END_IF;
+	END_IF;
+
+	#GoodCount := #statGood;
+	#NgCount := #statNg;
+
+END_FUNCTION_BLOCK
+
+DATA_BLOCK "ProductionSim_DB"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+NON_RETAIN
+"FB_Production"
+
+BEGIN
+
+END_DATA_BLOCK

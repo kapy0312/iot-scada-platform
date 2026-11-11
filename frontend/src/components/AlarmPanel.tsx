@@ -36,6 +36,8 @@ export default function AlarmPanel({ data, alarms, threshold, diagnosis }: Props
   const panelClass = top === "danger" ? "panel alert-danger" : top === "warning" ? "panel alert" : "panel";
   const mlStatus =
     !anomaly ? "等待資料"
+    : anomaly.status === "paused_stopped" ? "停機中，異常偵測暫停"
+    : anomaly.status === "paused_recovering" ? `恢復運轉中，等數值回穩再判斷（已 ${anomaly.elapsed ?? 0} 秒）`
     : anomaly.status === "collecting_data" ? "收集資料中（需要 30 筆才開始判斷）"
     : anomaly.status === "warming_up" ? `暖機中（剩 ${anomaly.remaining ?? "?"} 筆）`
     : anomaly.status === "model_mismatch" ? `模型需要的訊號沒讀到：${(anomaly.missing ?? []).join("、")}`

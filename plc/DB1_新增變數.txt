@@ -1,0 +1,17 @@
+﻿// DB1 要新增的變數（在 TIA Portal 打開 DB1，逐列加在最後面）
+// 每一個都要勾選「Accessible from HMI/OPC UA」與「Writable from HMI/OPC UA」，否則後端讀不到
+// 加完後：編譯 → 下載到 PLCSIM（DB1 結構改變，下載時選「重新初始化」）
+//
+// 名稱              資料類型   起始值   用途
+// machine_state     Int        2        機台狀態（PLC 寫）：0=計畫停機 1=運轉 2=待機 3=故障 4=換模
+// good_count        DInt       0        良品累計（PLC 寫）
+// ng_count          DInt       0        NG 累計（PLC 寫）
+// product_id        Int        1        目前品號（後端只讀，plcsim_ctl.py product N 可改）
+// planned_stop      Bool       FALSE    計畫停機：休息、保養
+// changeover_req    Bool       FALSE    換模中
+// fault_stop        Bool       FALSE    模擬停機故障（觸發後拴鎖）
+// fault_reset       Bool       FALSE    故障復歸（正緣有效，plcsim_ctl.py 會自動送一個脈衝）
+// counter_reset     Bool       FALSE    計數歸零（正緣有效，plcsim_ctl.py 會自動送一個脈衝）
+//
+// 另外：專案樹 → 外部原始檔 → 新增外部檔案 → 選 FB_Production.scl → 右鍵「從源生成塊」
+//       會產生 FB_Production 與 ProductionSim_DB；然後依 OB30_貼到OB30的程式.txt 更新 OB30

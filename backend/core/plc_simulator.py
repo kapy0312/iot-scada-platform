@@ -5,15 +5,19 @@ import time
 from datetime import datetime, timezone
 
 from asyncua import Client
-from core.device_profile import evaluate, get_profile, get_tags
+from core.device_profile import evaluate, get_production, get_profile, get_tags
 from core.incidents import INCIDENT_GAP_SECONDS, absorb, new_incident, severity_and_level
+from core.production import RUN, STATE_TEXT, CounterTracker, RunGate, is_running
 from core.ws_manager import manager
 from db.writer import write_to_db
 from db.anomaly_writer import record_anomaly, save_incident
+from db.status_writer import write_status
 from ml.inferencer import AnomalyDetector
 from ml.ollama_analyzer import analyze_anomaly
 
 detector = AnomalyDetector()
+counters = CounterTracker()   # PLC 累計計數 → 每秒增量
+run_gate = RunGate()          # 停機時暫停異常偵測
 OLLAMA_COOLDOWN = 60.0      # 同一次事件內，兩次 AI 診斷至少間隔 60 秒
 _last_ollama_call = 0.0
 _last_anomaly_at = 0.0
@@ -46,6 +50,11 @@ MOCK_SIGNALS = {
 
 _anomaly_override: bool = False
 _anomaly_deadline: float = 0.0
+
+# 內建模擬的生產計數：一直運轉，額定轉速 6 秒一件；模擬異常期間 NG 率提高
+MOCK_CYCLE_SECONDS = 6.0
+MOCK_NG_RATE = {False: 0.01, True: 0.10}
+_mock_prod = {"acc": 0.0, "good": 0, "ng": 0}
 
 
 def get_active_device_id() -> str:
@@ -91,7 +100,9 @@ async def switch_source(new_source: str):
             pass
 
     current_source = new_source
-    detector.buffer.clear()
+    detector.pause()
+    counters.forget()
+    run_gate.reset()
     _anomaly_override = False
     print(f"[PLC] 資料源切換為：{current_source}，ML 滑動視窗已清空")
     _polling_task = asyncio.create_task(_run_source_loop())
@@ -124,14 +135,26 @@ async def _opcua_poll_loop():
                     enable_node = await client.nodes.root.get_child(DB1_PATH + [f"{NS}:motor_enable"])
                 except Exception:
                     enable_node = None
+                # 生產訊號：舊版 PLC 程式沒有這些變數時略過，停機判斷退回看 motor_enable
+                prod_nodes = {}
+                for key, spec in get_production(get_active_device_id()).items():
+                    try:
+                        prod_nodes[key] = await client.nodes.root.get_child(DB1_PATH + [f"{NS}:{spec['node']}"])
+                    except Exception:
+                        pass
                 print(f"[PLC] ✅ 連線成功，讀取 {len(nodes)} 個訊號：{', '.join(nodes)}")
+                if prod_nodes:
+                    print(f"[PLC] 生產訊號 {len(prod_nodes)} 個：{', '.join(prod_nodes)}")
+                else:
+                    print("[PLC] ⚠ DB1 沒有生產訊號（machine_state 等），停機判斷改看 motor_enable，不計算 OEE")
 
                 while True:
                     values = {}
                     for tag, node in nodes.items():
                         values[tag] = round(float(await node.read_value()), 3)
                     enabled = int(bool(await enable_node.read_value())) if enable_node else 1
-                    await _process_reading(values, enabled)
+                    production = {key: int(await node.read_value()) for key, node in prod_nodes.items()}
+                    await _process_reading(values, enabled, production)
                     await asyncio.sleep(1)
         except asyncio.CancelledError:
             raise
@@ -158,13 +181,28 @@ async def _mock_poll_loop():
             else:
                 values[t] += random.gauss(0, sig["noise"]) + 0.02 * (sig["base"] - values[t])
             values[t] = max(0.0, values[t])
-        await _process_reading({t: round(v, 3) for t, v in values.items()})
+        await _process_reading({t: round(v, 3) for t, v in values.items()}, 1, _mock_production(values, anomalous))
         await asyncio.sleep(1)
 
 
-async def _process_reading(values: dict, motor_enable: int = 1):
+def _mock_production(values: dict, anomalous: bool) -> dict:
+    """內建模擬：一直是運轉狀態，依轉速累加產量（轉速低就做得慢）"""
+    speed = values.get("motor_speed", MOCK_SIGNALS["motor_speed"]["base"])
+    _mock_prod["acc"] += max(0.0, speed) / MOCK_SIGNALS["motor_speed"]["base"] / MOCK_CYCLE_SECONDS
+    while _mock_prod["acc"] >= 1.0 - 1e-9:     # 1e-9：1/6 連加 6 次會是 0.9999…，浮點誤差不該少算一件
+        _mock_prod["acc"] = max(0.0, _mock_prod["acc"] - 1.0)
+        key = "ng" if random.random() < MOCK_NG_RATE[anomalous] else "good"
+        _mock_prod[key] += 1
+    return {"machine_state": RUN, "good_count": _mock_prod["good"], "ng_count": _mock_prod["ng"], "product_id": 1}
+
+
+async def _process_reading(values: dict, motor_enable: int = 1, production: dict | None = None):
     """
-    每秒一次：ML 推論 → 判斷告警 → 維護事件 → 必要時觸發 AI 診斷 → 推送畫面、寫入資料庫
+    每秒一次：停機判斷 → ML 推論 → 判斷告警 → 維護事件 → 必要時觸發 AI 診斷 → 推送畫面、寫入資料庫
+
+    停機時暫停 ML 異常判斷（core/production.RunGate）：
+    - 停機中、或剛恢復運轉數值還沒回穩時，ML 不推論、滑動視窗清空
+    - 規格告警（警戒值、危險值）照常判斷：停機後溫度還很高一樣是安全問題
 
     兩種告警來源分開看：
     - 規格告警（rule_alarm）：任一訊號達警戒值或危險值，依設備規格判斷，反應最快
@@ -177,12 +215,21 @@ async def _process_reading(values: dict, motor_enable: int = 1):
     now = time.time()
     at = datetime.now(timezone.utc)
 
-    anomaly = detector.update(values)
+    production = production or {}
+    machine_state = production.get("machine_state")
 
     profile = get_profile(device_id) or {"tags": {}}
     levels = {tag: evaluate(spec, values[tag]) for tag, spec in profile["tags"].items() if values.get(tag) is not None}
     rule_alarm = any(lv in ("warning", "danger") for lv in levels.values())
     out_of_range = any(lv != "normal" for lv in levels.values())
+
+    gate = run_gate.update(is_running(machine_state, motor_enable), not out_of_range, now)
+    if gate["just_paused"]:
+        detector.pause()
+    if gate["status"] == "active":
+        anomaly = detector.update(values)
+    else:
+        anomaly = detector.paused_result(gate)
     anomaly["rule_alarm"] = rule_alarm
     abnormal = bool(anomaly.get("is_anomaly")) or rule_alarm
 
@@ -214,18 +261,39 @@ async def _process_reading(values: dict, motor_enable: int = 1):
             anomaly["ai_source"] = _latest_ai_source
         anomaly["incident_id"] = _incident["id"]   # 事件第一秒還沒寫進資料庫時會是 None
 
+    step = counters.step(device_id, now, production.get("good_count"), production.get("ng_count"))
+    if step.reset:
+        print(f"[PLC] {device_id} 生產計數歸零（換班歸零或 PLC 重新下載）")
+
     data = {
         "timestamp": now,
         **values,              # 頂層保留各訊號欄位，相容舊前端
         "values": values,      # 新前端讀這個
         "motor_enable": motor_enable,
         "anomaly": anomaly,
+        "production": {
+            "state": machine_state,
+            "state_text": STATE_TEXT.get(machine_state) if machine_state is not None else None,
+            "good_total": production.get("good_count"),
+            "ng_total": production.get("ng_count"),
+            "product_id": production.get("product_id"),
+        } if production else None,
         "source": current_source,
         "device_id": device_id,
     }
 
     await manager.broadcast(data)
     asyncio.create_task(write_to_db(device_id, values))
+    asyncio.create_task(write_status(device_id, at, {
+        "state": machine_state,
+        "motor_enable": bool(motor_enable),
+        "product_id": production.get("product_id"),
+        "good_total": production.get("good_count"),
+        "ng_total": production.get("ng_count"),
+        "good_delta": step.good_delta,
+        "ng_delta": step.ng_delta,
+        "dt": step.dt,
+    }))
     if abnormal:
         asyncio.create_task(record_anomaly(device_id, values, anomaly, _incident, at))
 

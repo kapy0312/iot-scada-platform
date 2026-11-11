@@ -58,6 +58,18 @@ class AnomalyDetector:
         }
         print(f"[ML] 載入模型：{latest['file']}（訊號 {len(self.tags)} 個，門檻 {self.threshold}）")
 
+    def pause(self):
+        """停機或切換資料源：清空滑動視窗，恢復後重新暖機，避免停機時的數值混進判斷"""
+        self.buffer.clear()
+        self.below = 0
+
+    def paused_result(self, gate: dict) -> dict:
+        """停機暫停期間回傳給畫面的結果（不推論）"""
+        result = {"threshold": self.threshold, "is_anomaly": False, "score": 0.0, "status": gate["status"]}
+        if "elapsed" in gate:
+            result["elapsed"] = gate["elapsed"]
+        return result
+
     def reload_model(self):
         """訓練完後熱更新，不需要重啟"""
         self._load_latest_model()

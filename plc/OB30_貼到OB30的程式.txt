@@ -1,8 +1,23 @@
 ﻿// 這不是源文件，不要用「從源生成塊」匯入
-// 取代 OB30 原本的內容（v0.2：新增 Vibration、Current 兩個輸出）
+// 取代 OB30 原本的內容（v0.3：新增 FB_Production 狀態機與計數，馬達啟動改由 RunPermit 控制）
 // legacy_random = TRUE 時改用 OB1 的舊亂數程式，這裡不寫入，避免兩邊搶同一個變數
+// 順序：先算狀態（FB_Production），再算馬達物理（FB_MachineSim）
+//       故障、換模、計畫停機時 RunPermit = FALSE，就算 motor_enable = 1 馬達也會停（連鎖）
 IF NOT "DB1".legacy_random THEN
-    "MachineSim_DB"(Enable := "DB1".motor_enable,
+    "ProductionSim_DB"(MotorEnable := "DB1".motor_enable,
+                       PlannedStop := "DB1".planned_stop,
+                       ChangeoverReq := "DB1".changeover_req,
+                       FaultStop := "DB1".fault_stop,
+                       FaultReset := "DB1".fault_reset,
+                       CounterReset := "DB1".counter_reset,
+                       Speed := "DB1".motor_speed,
+                       FaultMode := "DB1".fault_mode,
+                       CycleTime := 0.1,
+                       State => "DB1".machine_state,
+                       GoodCount => "DB1".good_count,
+                       NgCount => "DB1".ng_count);
+
+    "MachineSim_DB"(Enable := "ProductionSim_DB".RunPermit,
                     Setpoint := "DB1".speed_setpoint,
                     FaultMode := "DB1".fault_mode,
                     CycleTime := 0.1,

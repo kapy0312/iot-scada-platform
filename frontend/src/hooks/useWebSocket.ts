@@ -7,6 +7,7 @@ export interface AnomalyResult {
   score: number;
   status: string;
   remaining?: number;
+  elapsed?: number;     // paused_recovering：恢復運轉後已經過幾秒
   missing?: string[];
   threshold?: number;   // 目前模型的門檻（每個模型不同）
   rule_alarm?: boolean; // 任一訊號達警戒值或危險值
@@ -14,6 +15,14 @@ export interface AnomalyResult {
   ai_analysis?: string;
   ai_source?: ManualSource | null; // 診斷依據的手冊章節（後端選定）
   incident_id?: number | null;     // 所屬事件；事件第一秒還沒寫進資料庫時是 null
+}
+
+export interface ProductionStatus {
+  state: number | null;        // 0=計畫停機 1=運轉 2=待機 3=故障 4=換模
+  state_text: string | null;
+  good_total: number | null;
+  ng_total: number | null;
+  product_id: number | null;
 }
 
 export interface PlcData {
@@ -24,6 +33,7 @@ export interface PlcData {
   pressure?: number;
   motor_enable: number;
   anomaly: AnomalyResult;
+  production?: ProductionStatus | null; // PLC 沒有生產變數時為 null
   source?: string;
   device_id?: string;
 }

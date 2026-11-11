@@ -9,6 +9,10 @@
     --minutes  取最近幾分鐘（與 --days 擇一，預設最近 30 天）
     --keep-anomalies  預設會排除異常事件前後 2 分鐘的資料，只用「正常」資料訓練；加上這個參數則不排除
 
+停機與剛恢復運轉的資料一律不用（跟即時偵測的暫停規則相同，見 core/production.RunGate）：
+依 machine_status 判斷；那段時間沒有 machine_status 紀錄（005 之前的舊資料）也不用。
+整個區間都沒有 machine_status 時退回舊做法（全部使用）並提醒。
+
 訓練完會存到 models/，後端可呼叫 POST /api/system/reload-model 立即換用，不必重啟。
 """
 import argparse
@@ -21,7 +25,8 @@ from sklearn.ensemble import IsolationForest
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from core.device_profile import get_tags
+from core.device_profile import evaluate, get_profile, get_tags
+from core.production import RunGate, is_running
 from db.pool import acquire, close_pool
 from ml.features import WINDOW, build_training_features
 from ml.model_store import save_model
@@ -66,6 +71,58 @@ def drop_windows(df: pd.DataFrame, windows: list[tuple[datetime, datetime]]) -> 
     return df[~mask]
 
 
+async def load_status(device_id: str, since: datetime) -> pd.DataFrame:
+    """每秒的機台狀態；表不存在（還沒跑 005）時回空表"""
+    try:
+        async with acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT date_trunc('second', time) AS t, max(state) AS state, bool_or(motor_enable) AS motor_enable
+                FROM machine_status
+                WHERE device_id = $1 AND time >= $2
+                GROUP BY t ORDER BY t
+            """, device_id, since)
+    except Exception as e:
+        if "machine_status" in str(e):
+            return pd.DataFrame()
+        raise
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows, columns=["time", "state", "motor_enable"]).set_index("time")
+
+
+def running_mask(df: pd.DataFrame, status: pd.DataFrame, device_id: str, tags: list[str]) -> pd.Series:
+    """
+    逐秒重播即時偵測的暫停規則，回傳「這一秒可以拿來訓練」的布林值
+    沒有狀態紀錄的秒數當成停機（保守：接下來也要等恢復期）
+    「所有訊號正常」跟 device_profile.evaluate 回傳 normal 的條件相同，先整欄算好再逐秒重播
+    """
+    specs = (get_profile(device_id) or {"tags": {}})["tags"]
+    st = status.reindex(df.index)
+
+    all_normal = np.ones(len(df), dtype=bool)
+    for tag in tags:
+        spec = specs.get(tag)
+        if spec is None:
+            continue
+        v = df[tag].to_numpy(dtype=float)
+        lo, hi = spec["normal"]
+        all_normal &= (v >= lo) & (v <= hi) & (v < spec["warning"]) & (v < spec["danger"])
+
+    states = st["state"].to_numpy(dtype=float)
+    enables = st["motor_enable"].astype("float").to_numpy()
+    times = [t.timestamp() for t in df.index]
+
+    gate = RunGate()
+    keep = np.zeros(len(df), dtype=bool)
+    for i in range(len(df)):
+        has_status = not (np.isnan(states[i]) and np.isnan(enables[i]))
+        state = None if np.isnan(states[i]) else int(states[i])
+        enable = None if np.isnan(enables[i]) else int(enables[i])
+        running = has_status and is_running(state, enable)
+        keep[i] = gate.update(running, bool(all_normal[i]), times[i])["status"] == "active"
+    return pd.Series(keep, index=df.index)
+
+
 def fit(X: pd.DataFrame) -> Pipeline:
     pipeline = Pipeline([
         ("scaler", StandardScaler()),
@@ -93,6 +150,15 @@ async def train(device_id: str, since: datetime, keep_anomalies: bool = False) -
     if not keep_anomalies:
         df = drop_windows(df, await load_anomaly_windows(device_id, since))
     print(f"[Train] 時間點 {total} 筆，排除缺值與異常時段後剩 {len(df)} 筆")
+
+    status = await load_status(device_id, since)
+    if status.empty:
+        print("[Train] ⚠ 這段時間沒有 machine_status 紀錄，無法排除停機資料（模型可能把停機當成正常）；"
+              "建議 005 上線、累積 60 分鐘以上運轉資料後再訓練")
+    elif not df.empty:
+        before = len(df)
+        df = df[running_mask(df, status, device_id, tags)]
+        print(f"[Train] 排除停機、恢復期與沒有狀態紀錄的時段：{before} → {len(df)} 筆")
 
     X = build_training_features(df.reset_index(drop=True), tags, WINDOW)
     if len(X) < MIN_SAMPLES:
