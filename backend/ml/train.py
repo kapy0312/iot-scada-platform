@@ -97,7 +97,11 @@ def running_mask(df: pd.DataFrame, status: pd.DataFrame, device_id: str, tags: l
     「所有訊號正常」跟 device_profile.evaluate 回傳 normal 的條件相同，先整欄算好再逐秒重播
     """
     specs = (get_profile(device_id) or {"tags": {}})["tags"]
-    st = status.reindex(df.index)
+    # 用「1 秒內最接近的那筆」對齊，不要求同一秒：舊資料兩張表的時間戳記會差幾毫秒，跨秒時會對不上
+    st = pd.merge_asof(
+        pd.DataFrame(index=df.index).sort_index(), status.sort_index(),
+        left_index=True, right_index=True, direction="nearest", tolerance=pd.Timedelta(seconds=1),
+    ).reindex(df.index)
 
     all_normal = np.ones(len(df), dtype=bool)
     for tag in tags:
@@ -113,6 +117,7 @@ def running_mask(df: pd.DataFrame, status: pd.DataFrame, device_id: str, tags: l
     times = [t.timestamp() for t in df.index]
 
     gate = RunGate()
+    gate.stopped = False   # 訓練區間的起點是任意切的，不是真的剛開機；中間的空白段一樣會走恢復期
     keep = np.zeros(len(df), dtype=bool)
     for i in range(len(df)):
         has_status = not (np.isnan(states[i]) and np.isnan(enables[i]))

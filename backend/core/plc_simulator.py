@@ -283,7 +283,7 @@ async def _process_reading(values: dict, motor_enable: int = 1, production: dict
     }
 
     await manager.broadcast(data)
-    asyncio.create_task(write_to_db(device_id, values))
+    asyncio.create_task(write_to_db(device_id, values, at))
     asyncio.create_task(write_status(device_id, at, {
         "state": machine_state,
         "motor_enable": bool(motor_enable),

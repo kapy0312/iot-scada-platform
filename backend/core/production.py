@@ -9,6 +9,7 @@
    - 停機中 → paused_stopped
    - 剛恢復運轉 → 至少等 RECOVERY_MIN_SECONDS；之後所有訊號回到正常範圍就恢復判斷，
      最多等 RECOVERY_MAX_SECONDS（啟動時就有真故障時不會一直被藏起來）
+   - 「剛恢復」也包括：後端剛啟動、跟 PLC 斷線後重連（中間停了多久、數值變多少都不知道，一律當成剛開機）
 """
 import os
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ GAP_SECONDS = 10.0     # 跟上一筆隔超過這麼久，這段的件數不算�
 # ---------- 停機暫停 ----------
 RECOVERY_MIN_SECONDS = float(os.getenv("RECOVERY_MIN_SECONDS", "30"))
 RECOVERY_MAX_SECONDS = float(os.getenv("RECOVERY_MAX_SECONDS", "120"))
+RESUME_GAP_SECONDS = 5.0   # 兩次讀值隔超過這麼久（斷線、PLCSIM 暫停、筆電睡眠）就當成重新開機
 
 
 def is_running(machine_state: int | None, motor_enable: int | None) -> bool:
@@ -90,15 +92,20 @@ class CounterTracker:
 class RunGate:
     """決定這一秒要不要做 ML 異常判斷"""
 
-    def __init__(self, min_seconds: float = RECOVERY_MIN_SECONDS, max_seconds: float = RECOVERY_MAX_SECONDS):
+    def __init__(self, min_seconds: float = RECOVERY_MIN_SECONDS, max_seconds: float = RECOVERY_MAX_SECONDS,
+                 gap_seconds: float = RESUME_GAP_SECONDS):
         self.min_seconds = min_seconds
         self.max_seconds = max_seconds
+        self.gap_seconds = gap_seconds
         self.resumed_at: float | None = None   # 停機後恢復運轉的時間；None＝不在恢復期
-        self.stopped = False
+        self.stopped = True                    # 一開始當成停機：後端剛啟動也要走恢復期
+        self.last_seen: float | None = None
 
     def reset(self) -> None:
+        """切換資料源時呼叫：下一筆當成剛開機"""
         self.resumed_at = None
-        self.stopped = False
+        self.stopped = True
+        self.last_seen = None
 
     def update(self, running: bool, all_normal: bool, now: float) -> dict:
         """
@@ -106,14 +113,18 @@ class RunGate:
         just_paused：這一秒剛從「判斷中」變成暫停，呼叫端要清空 ML 滑動視窗
         """
         was_active = not self.stopped and self.resumed_at is None
+        if self.last_seen is not None and now - self.last_seen > self.gap_seconds:
+            self.stopped = True                # 斷線、暫停過：當成中間停過機
+        self.last_seen = now
         if not running:
             self.stopped = True
             self.resumed_at = None
             return {"status": "paused_stopped", "just_paused": was_active}
 
-        if self.stopped:                 # 停機後第一秒恢復運轉
+        if self.stopped:                 # 停機後（或斷線重連、剛啟動）第一秒在運轉
             self.stopped = False
             self.resumed_at = now
+            return {"status": "paused_recovering", "just_paused": was_active, "elapsed": 0}
 
         if self.resumed_at is not None:
             elapsed = now - self.resumed_at

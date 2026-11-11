@@ -7,12 +7,13 @@ from db.pool import acquire
 NUMERIC_TAGS = all_tags()
 
 
-async def write_to_db(device_id: str, values: dict):
+async def write_to_db(device_id: str, values: dict, at: datetime | None = None):
     """
     把一秒的讀值寫入 TimescaleDB（長表格：一個訊號一列）
     values 格式：{"motor_speed": 1480.2, "temperature": 70.1, ...}
+    at：讀值的時間；每秒流程會傳入跟 machine_status 同一個時間，兩張表才對得起來
     """
-    now = datetime.now(timezone.utc)
+    now = at or datetime.now(timezone.utc)
     rows = [
         (now, device_id, tag, float(value), 192)
         for tag, value in values.items()

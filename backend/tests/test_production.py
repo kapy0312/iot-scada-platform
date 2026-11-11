@@ -117,48 +117,77 @@ def test_切換資料源後重新開始():
 
 # ---------- 停機暫停 ----------
 
-def test_停機時暫停並要求清空視窗():
+def _active_gate(now=0.0):
+    """已經在正常判斷中的 RunGate（跳過開機的恢復期）"""
     g = RunGate(30, 120)
+    g.stopped, g.last_seen = False, now
+    return g
+
+
+def test_停機時暫停並要求清空視窗():
+    g = _active_gate()
     assert g.update(True, True, 0)["status"] == "active"
     r = g.update(False, False, 1)
     assert r == {"status": "paused_stopped", "just_paused": True}
     assert g.update(False, False, 2)["just_paused"] is False   # 只在剛停的那一秒清一次
 
 
+def _feed(g, running, normal, t_from, t_to):
+    """每秒餵一筆（跟實際每秒流程一樣），回傳最後一筆的結果"""
+    r = None
+    for t in range(t_from, t_to + 1):
+        r = g.update(running, normal, t)
+    return r
+
+
 def test_恢復運轉至少等30秒():
-    g = RunGate(30, 120)
-    g.update(False, False, 0)
-    assert g.update(True, True, 10)["status"] == "paused_recovering"
-    assert g.update(True, True, 39)["status"] == "paused_recovering"
-    assert g.update(True, True, 40)["status"] == "active"
+    g = _active_gate()
+    _feed(g, False, False, 1, 5)                                          # 停機 5 秒
+    assert _feed(g, True, True, 6, 35)["status"] == "paused_recovering"   # 恢復運轉第 0～29 秒
+    assert _feed(g, True, True, 36, 36)["status"] == "active"             # 第 30 秒
 
 
 def test_數值沒回穩就繼續等():
-    g = RunGate(30, 120)
-    g.update(False, False, 0)
-    g.update(True, False, 1)
-    assert g.update(True, False, 60)["status"] == "paused_recovering"   # 溫度還沒回到正常
-    assert g.update(True, True, 61)["status"] == "active"
+    g = _active_gate()
+    _feed(g, False, False, 1, 1)
+    assert _feed(g, True, False, 2, 61)["status"] == "paused_recovering"  # 溫度還沒回到正常
+    assert _feed(g, True, True, 62, 62)["status"] == "active"
 
 
 def test_最多等120秒_啟動時就有故障不會被藏起來():
-    g = RunGate(30, 120)
-    g.update(False, False, 0)
-    g.update(True, False, 1)
-    assert g.update(True, False, 120)["status"] == "paused_recovering"
-    assert g.update(True, False, 121)["status"] == "active"
+    g = _active_gate()
+    _feed(g, False, False, 1, 1)
+    assert _feed(g, True, False, 2, 121)["status"] == "paused_recovering"
+    assert _feed(g, True, False, 122, 122)["status"] == "active"
 
 
 def test_恢復期中又停機():
+    g = _active_gate()
+    _feed(g, False, False, 1, 1)
+    _feed(g, True, True, 2, 10)
+    assert g.update(False, False, 11) == {"status": "paused_stopped", "just_paused": False}
+    assert g.update(True, True, 12)["status"] == "paused_recovering"   # 恢復期重新計算
+
+
+def test_後端剛啟動也走恢復期():
     g = RunGate(30, 120)
-    g.update(False, False, 0)
+    assert _feed(g, True, False, 0, 10)["status"] == "paused_recovering"   # 開機時溫度還低
+    assert _feed(g, True, True, 11, 30)["status"] == "active"
+
+
+def test_斷線重連後走恢復期並清空視窗():
+    """PLCSIM 停了一小時再恢復：重連時機台已經在轉，但溫度還沒回到正常"""
+    g = _active_gate()
     g.update(True, True, 1)
-    assert g.update(False, False, 10) == {"status": "paused_stopped", "just_paused": False}
-    assert g.update(True, True, 11)["status"] == "paused_recovering"   # 恢復期重新計算
+    r = g.update(True, False, 3600)
+    assert r["status"] == "paused_recovering" and r["just_paused"] is True
+    assert _feed(g, True, False, 3601, 3700)["status"] == "paused_recovering"
+    assert g.update(True, True, 3701)["status"] == "active"
 
 
-def test_後端剛啟動時機台在運轉直接判斷():
-    assert RunGate(30, 120).update(True, True, 0)["status"] == "active"
+def test_短暫延遲不算斷線():
+    g = _active_gate()
+    assert g.update(True, True, 4)["status"] == "active"
 
 
 # ---------- 訓練過濾 ----------
@@ -187,7 +216,8 @@ def test_沒有狀態紀錄的秒數不用():
     df = _wide([NORMAL] * 5)
     status = pd.DataFrame({"state": [RUN, RUN], "motor_enable": [True, True]}, index=df.index[:2])
     keep = running_mask(df, status, DEV, get_tags(DEV)).tolist()
-    assert keep == [True, True, False, False, False]
+    # 第 3 秒距離最後一筆狀態剛好 1 秒，算對得上；再後面就是真的沒有紀錄
+    assert keep == [True, True, True, False, False]
 
 
 def test_舊版PLC只有motor_enable也能過濾():
@@ -242,7 +272,9 @@ def pipeline(monkeypatch):
 
     monkeypatch.setattr(ps, "detector", det)
     monkeypatch.setattr(ps, "counters", CounterTracker())
-    monkeypatch.setattr(ps, "run_gate", RunGate(30, 120))
+    gate = RunGate(30, 120)
+    gate.stopped, gate.last_seen = False, 1000.0   # 已經在正常判斷中
+    monkeypatch.setattr(ps, "run_gate", gate)
     monkeypatch.setattr(ps, "_incident", None)
     monkeypatch.setattr(ps, "_last_ollama_call", 0.0)
     monkeypatch.setattr(ps, "OPCUA_DEVICE_ID", DEV)
@@ -278,6 +310,15 @@ def test_停機不再被判成偏低異常(pipeline):
     assert last["anomaly"]["status"] == "paused_stopped"
     assert pipeline["det"].calls == 1            # 停機那秒沒有推論
     assert pipeline["det"].paused == 1           # 滑動視窗清空一次
+    assert pipeline["anomaly"] == [] and pipeline["diagnose"] == 0
+
+
+def test_斷線重連時溫度偏低不會觸發診斷(pipeline):
+    cold = {**NORMAL, "temperature": 30}
+    pipeline["clock"]["t"] += 3600
+    asyncio.run(_run(cold, 1, _prod(RUN)))
+    assert pipeline["broadcast"][-1]["anomaly"]["status"] == "paused_recovering"
+    assert pipeline["det"].calls == 0 and pipeline["det"].paused == 1
     assert pipeline["anomaly"] == [] and pipeline["diagnose"] == 0
 
 
@@ -378,3 +419,26 @@ def test_005建表與寫入(monkeypatch):
             await conn.close()
 
     asyncio.run(go())
+
+
+def test_狀態紀錄差幾毫秒跨秒也對得起來():
+    """舊資料：plc_measurements 在 13:00:01、machine_status 在 13:00:00.998，取到秒會差一秒"""
+    df = _wide([NORMAL] * 5)
+    shifted = df.index - pd.Timedelta(milliseconds=2)
+    status = pd.DataFrame({"state": [RUN] * 5, "motor_enable": [True] * 5}, index=shifted.floor("s"))
+    assert running_mask(df, status, DEV, get_tags(DEV)).tolist() == [True] * 5
+
+
+def test_每秒流程兩張表用同一個時間(pipeline, monkeypatch):
+    seen = {}
+
+    async def write_db(device_id, values, at=None):
+        seen["meas"] = at
+
+    async def write_status(device_id, at, row):
+        seen["status"] = at
+
+    monkeypatch.setattr(ps, "write_to_db", write_db)
+    monkeypatch.setattr(ps, "write_status", write_status)
+    asyncio.run(_run(NORMAL, 1, _prod(RUN)))
+    assert seen["meas"] is not None and seen["meas"] == seen["status"]
