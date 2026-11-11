@@ -10,6 +10,7 @@ from routers.rag import router as rag_router
 from routers.system import router as system_router
 from routers.device import router as device_router
 from routers.auth import router as auth_router
+from routers.oee import router as oee_router
 from core.config import get_database_url, masked
 from core.plc_simulator import start_polling, stop_polling, detector
 from db.pool import close_pool
@@ -54,6 +55,7 @@ app.include_router(history_router)
 app.include_router(rag_router)
 app.include_router(system_router)
 app.include_router(device_router)
+app.include_router(oee_router)
 
 @app.get("/health")
 async def health():
