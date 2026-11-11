@@ -2,16 +2,19 @@
 TITLE = Motor and pump machine simulation for PLCSIM
 { S7_Optimized_Access := 'TRUE' }
 AUTHOR : Kevin
-VERSION : 0.2
+VERSION : 0.3
 // 模擬「馬達帶動泵浦」的機台，讓 PLCSIM 的數值會隨啟停、設定值與故障模式變化
 // 由 OB30（循環中斷 100 ms）呼叫
 // v0.2：新增振動、馬達電流與故障 4（軸承磨損）、5（機械卡滯）
+// v0.3：新增漸進劣化（DriftTag／DriftRate），讓訊號每分鐘慢慢上升，用來驗證趨勢預警
 
    VAR_INPUT
       Enable : Bool;             // 馬達啟動（DB1.motor_enable）
       Setpoint : Real;           // 轉速設定值 RPM（DB1.speed_setpoint）
       FaultMode : Int;           // 0=正常 1=下游阻塞背壓過高 2=冷卻風扇故障 3=負載突然降低 4=軸承磨損 5=機械卡滯
       CycleTime : Real := 0.1;   // 呼叫週期（秒），要跟 OB30 的循環時間一致
+      DriftTag : Int;            // 漸進劣化對象：0=關閉 1=溫度 2=振動 3=壓力 4=電流（DB1.drift_tag）
+      DriftRate : Real;          // 劣化速度：每分鐘增加多少（單位跟該訊號相同，DB1.drift_rate）
    END_VAR
 
    VAR_OUTPUT
@@ -29,6 +32,7 @@ VERSION : 0.2
       statVib : Real := 0.0;
       statCurrent : Real := 0.0;
       seed : UDInt := 12345;
+      statDrift : Real := 0.0;   // 劣化累積量：運轉時累加、停機時保留（磨損不會因為停機就消失），DriftTag=0 時歸零
    END_VAR
 
    VAR_TEMP
@@ -60,6 +64,13 @@ VERSION : 0.2
 
 
 BEGIN
+	// ---------- 0. 漸進劣化：運轉中每個週期累加 DriftRate / 60 × CycleTime ----------
+	IF #DriftTag = 0 THEN
+	    #statDrift := 0.0;
+	ELSIF #Enable THEN
+	    #statDrift := #statDrift + #DriftRate / 60.0 * #CycleTime;
+	END_IF;
+
 	// ---------- 1. 轉速：一階延遲追設定值 ----------
 	IF #Enable THEN
 	    #speedTarget := LIMIT(MN := 0.0, IN := #Setpoint, MX := #MAX_SPEED);
@@ -85,6 +96,9 @@ BEGIN
 	    3:  // 負載降低，壓力反而正常偏低（手冊 5.1）
 	        #pressTarget := #pressTarget * 0.7;
 	END_CASE;
+	IF #Enable AND #DriftTag = 3 THEN
+	    #pressTarget := #pressTarget + #statDrift;
+	END_IF;
 	#statPress := #statPress + (#pressTarget - #statPress) * #CycleTime / #TAU_PRESS;
 
 	// ---------- 3. 溫度：隨負載上升，熱慣性較慢 ----------
@@ -101,6 +115,9 @@ BEGIN
 	    5:  // 卡滯時馬達長時間過載
 	        #tempTarget := #tempTarget + 25.0;
 	END_CASE;
+	IF #Enable AND #DriftTag = 1 THEN
+	    #tempTarget := #tempTarget + #statDrift;
+	END_IF;
 	#statTemp := #statTemp + (#tempTarget - #statTemp) * #CycleTime / #TAU_TEMP;
 
 	// ---------- 4. 馬達電流：空載電流＋負載電流（泵浦負載約與轉速平方成正比） ----------
@@ -116,6 +133,9 @@ BEGIN
 	    5:  // 機械卡滯，電流大幅上升
 	        #currentTarget := #currentTarget + 10.0;
 	END_CASE;
+	IF #Enable AND #DriftTag = 4 THEN
+	    #currentTarget := #currentTarget + #statDrift;
+	END_IF;
 	#statCurrent := #statCurrent + (#currentTarget - #statCurrent) * #CycleTime / #TAU_CURRENT;
 
 	// ---------- 5. 振動：隨轉速平方增加，額定轉速時約 1.2 mm/s ----------
@@ -132,6 +152,9 @@ BEGIN
 	    5:  // 卡滯造成負載波動
 	        #vibTarget := #vibTarget + 1.0;
 	END_CASE;
+	IF #Enable AND #DriftTag = 2 THEN
+	    #vibTarget := #vibTarget + #statDrift;
+	END_IF;
 	#statVib := #statVib + (#vibTarget - #statVib) * #CycleTime / #tauVib;
 
 	// ---------- 6. 雜訊：簡單亂數，讓數值像真實感測器 ----------

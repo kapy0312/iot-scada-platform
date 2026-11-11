@@ -15,6 +15,12 @@
     python tools/plcsim_ctl.py fault-reset     # 解除停機故障並送復歸脈衝
     python tools/plcsim_ctl.py product 2       # 切換品號
     python tools/plcsim_ctl.py counter-reset   # 良品／NG 計數歸零（模擬換班歸零）
+
+  漸進劣化（趨勢預警驗證，需要 DB1 已加入 drift_tag、drift_rate，並更新 FB_MachineSim v0.3）：
+    python tools/plcsim_ctl.py drift temp 1.0  # 溫度每分鐘 +1 °C（70 → 85 約 15 分鐘）
+    python tools/plcsim_ctl.py drift vib 0.1   # 振動每分鐘 +0.1 mm/s（1.2 → 2.8 約 16 分鐘）
+    python tools/plcsim_ctl.py drift off       # 關閉並歸零累積量
+    對象：temp、vib、pressure、current；劣化只在運轉時累加，停機時保留
 """
 import asyncio
 import os
@@ -33,6 +39,9 @@ FAULTS = {
     4: "軸承磨損（手冊3 4.1）",
     5: "機械卡滯（手冊3 4.2）",
 }
+
+DRIFT_TAGS = {"temp": 1, "vib": 2, "pressure": 3, "current": 4}
+DRIFT_TEXT = {0: "關閉", 1: "溫度", 2: "振動", 3: "壓力", 4: "電流"}
 
 
 async def node(client: Client, name: str):
@@ -71,6 +80,15 @@ async def status(client: Client):
     vib = "（DB1 沒有此變數）" if vals["vibration"] is None else f"{vals['vibration']:.2f} mm/s"
     cur = "（DB1 沒有此變數）" if vals["current"] is None else f"{vals['current']:.1f} A"
     print(f"振動={vib}  電流={cur}")
+    try:
+        d_tag = await (await node(client, "drift_tag")).read_value()
+        d_rate = await (await node(client, "drift_rate")).read_value()
+        if d_tag:
+            print(f"漸進劣化：{DRIFT_TEXT.get(d_tag, '?')} 每分鐘 +{d_rate:g}")
+        else:
+            print("漸進劣化：關閉")
+    except Exception:
+        pass   # DB1 還沒有 drift 變數
 
     prod = {}
     for name in ("machine_state", "good_count", "ng_count", "product_id", "planned_stop", "changeover_req", "fault_stop"):
@@ -131,6 +149,23 @@ async def main():
         elif cmd == "counter-reset":
             await pulse(client, "counter_reset")
             print("良品／NG 計數已歸零")
+        elif cmd == "drift":
+            arg = (sys.argv[2] if len(sys.argv) > 2 else "").lower()
+            if arg == "off":
+                await write(client, "drift_tag", 0, ua.VariantType.Int16)
+                await write(client, "drift_rate", 0.0, ua.VariantType.Float)
+                print("漸進劣化 → 關閉（累積量歸零，數值約 1 分鐘內回到正常）")
+            else:
+                try:
+                    rate = float(sys.argv[3])
+                except (IndexError, ValueError):
+                    rate = None
+                if arg not in DRIFT_TAGS or rate is None or rate <= 0:
+                    print(f"用法：python tools/plcsim_ctl.py drift {'|'.join(DRIFT_TAGS)} 每分鐘增加量（正數）；或 drift off")
+                    return
+                await write(client, "drift_rate", rate, ua.VariantType.Float)
+                await write(client, "drift_tag", DRIFT_TAGS[arg], ua.VariantType.Int16)
+                print(f"漸進劣化 → {DRIFT_TEXT[DRIFT_TAGS[arg]]} 每分鐘 +{rate:g}")
         elif cmd != "status":
             print(__doc__)
             return

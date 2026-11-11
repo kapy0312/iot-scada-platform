@@ -15,3 +15,12 @@
 //
 // 另外：專案樹 → 外部原始檔 → 新增外部檔案 → 選 FB_Production.scl → 右鍵「從源生成塊」
 //       會產生 FB_Production 與 ProductionSim_DB；然後依 OB30_貼到OB30的程式.txt 更新 OB30
+
+//
+// ---------- v0.4 趨勢預警驗證用（漸進劣化），一樣加在 DB1 最後面、勾選 HMI/OPC UA 可讀寫 ----------
+// drift_tag         Int        0        劣化對象：0=關閉 1=溫度 2=振動 3=壓力 4=電流
+// drift_rate        Real       0.0      每分鐘增加多少（例：溫度 1.0＝每分鐘 +1 °C）
+//
+// FB_MachineSim 介面多了兩個輸入：外部原始檔換成新版 FB_MachineSim.scl → 右鍵「從源生成塊」
+// （MachineSim_DB 會跟著重新產生），再依 OB30_貼到OB30的程式.txt 更新 OB30
+// 編譯 → 下載到 PLCSIM（DB1 結構改變，下載時選「重新初始化」，計數會歸零屬正常）

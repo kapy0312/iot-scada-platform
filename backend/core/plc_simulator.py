@@ -8,6 +8,7 @@ from asyncua import Client
 from core.device_profile import evaluate, get_production, get_profile, get_tags
 from core.incidents import INCIDENT_GAP_SECONDS, absorb, new_incident, severity_and_level
 from core.production import RUN, STATE_TEXT, CounterTracker, RunGate, is_running
+from core.trend import TrendTracker
 from core.ws_manager import manager
 from db.writer import write_to_db
 from db.anomaly_writer import record_anomaly, save_incident
@@ -18,6 +19,7 @@ from ml.ollama_analyzer import analyze_anomaly
 detector = AnomalyDetector()
 counters = CounterTracker()   # PLC 累計計數 → 每秒增量
 run_gate = RunGate()          # 停機時暫停異常偵測
+trend = TrendTracker()        # 趨勢預警：推估多久後達警戒值（停機、恢復期跟著 RunGate 暫停）
 OLLAMA_COOLDOWN = 60.0      # 同一次事件內，兩次 AI 診斷至少間隔 60 秒
 _last_ollama_call = 0.0
 _last_anomaly_at = 0.0
@@ -103,6 +105,7 @@ async def switch_source(new_source: str):
     detector.pause()
     counters.forget()
     run_gate.reset()
+    _handle_trend_events(trend.reset(time.time()))
     _anomaly_override = False
     print(f"[PLC] 資料源切換為：{current_source}，ML 滑動視窗已清空")
     _polling_task = asyncio.create_task(_run_source_loop())
@@ -198,7 +201,7 @@ def _mock_production(values: dict, anomalous: bool) -> dict:
 
 async def _process_reading(values: dict, motor_enable: int = 1, production: dict | None = None):
     """
-    每秒一次：停機判斷 → ML 推論 → 判斷告警 → 維護事件 → 必要時觸發 AI 診斷 → 推送畫面、寫入資料庫
+    每秒一次：停機判斷 → ML 推論 → 趨勢預警 → 判斷告警 → 維護事件 → 必要時觸發 AI 診斷 → 推送畫面、寫入資料庫
 
     停機時暫停 ML 異常判斷（core/production.RunGate）：
     - 停機中、或剛恢復運轉數值還沒回穩時，ML 不推論、滑動視窗清空
@@ -231,6 +234,7 @@ async def _process_reading(values: dict, motor_enable: int = 1, production: dict
     else:
         anomaly = detector.paused_result(gate)
     anomaly["rule_alarm"] = rule_alarm
+    _handle_trend_events(trend.update(device_id, values, profile["tags"], now, gate["status"] == "active"))
     abnormal = bool(anomaly.get("is_anomaly")) or rule_alarm
 
     if abnormal:
@@ -271,6 +275,7 @@ async def _process_reading(values: dict, motor_enable: int = 1, production: dict
         "values": values,      # 新前端讀這個
         "motor_enable": motor_enable,
         "anomaly": anomaly,
+        "trend": trend.snapshot(gate["status"]),
         "production": {
             "state": machine_state,
             "state_text": STATE_TEXT.get(machine_state) if machine_state is not None else None,
@@ -296,6 +301,31 @@ async def _process_reading(values: dict, motor_enable: int = 1, production: dict
     }))
     if abnormal:
         asyncio.create_task(record_anomaly(device_id, values, anomaly, _incident, at))
+
+
+_trend_logged: dict[str, float] = {}   # 每個訊號上次印預估時間的時間，預警中每分鐘印一次
+
+
+def _handle_trend_events(events: list[dict]):
+    """預警開始／結束印在 log，預警中每分鐘印一次最新預估；寫入 trend_warnings 在 B 包加上"""
+    for e in events:
+        ep = e["episode"]
+        name = f"{ep['device_id']} {ep['tag_name']}"
+        line = "警戒" if ep["target_level"] == "warning" else "危險"
+        if e["type"] == "start":
+            _trend_logged[name] = ep["started_at"]
+            print(f"[TREND] {name} 預警：約 {ep['first_eta_s'] // 60} 分鐘後達{line}值 {ep['threshold']}"
+                  f"（每分鐘 +{ep['slope_per_min']}）")
+        elif e["type"] == "update" and ep["ended_at"] - _trend_logged.get(name, 0) >= 60:
+            _trend_logged[name] = ep["ended_at"]
+            snap = trend.tags.get(ep["tag_name"])
+            eta = snap.last.get("eta_s") if snap else None
+            if eta is not None:
+                print(f"[TREND] {name} 預估 {eta // 60} 分 {eta % 60} 秒後達{line}值（目前 {ep['value_at_end']}，"
+                      f"每分鐘 +{ep['slope_per_min']}）")
+        elif e["type"] == "end":
+            _trend_logged.pop(name, None)
+            print(f"[TREND] {name} {line}值預警結束：{ep['outcome']}")
 
 
 async def _fetch_ollama_analysis(values: dict, device_id: str, incident: dict, severity: int):
