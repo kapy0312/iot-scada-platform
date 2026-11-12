@@ -41,3 +41,20 @@ def row_view(r) -> dict:
         "lead_s": lead,
         "incident_id": r["incident_id"],
     }
+
+
+def miss_summary(incidents: list[dict], warned_ids: set[int]) -> dict:
+    """
+    漏報：真的超過警戒或危險值的事件，事前有沒有預警到（有一筆 reached 預警連到這個事件就算有）
+    incidents：level 是 warning／danger 的事件（id、started_at、level、device_id）
+    只有偏高、偏低、或只有 ML 異常的事件不算：趨勢預警只預估「往上越過警戒、危險值」
+    """
+    total = len(incidents)
+    missed = [i for i in incidents if i["id"] not in warned_ids]
+    return {
+        "incidents_over_line": total,                  # 這段時間超過警戒或危險值的事件數
+        "warned": total - len(missed),                 # 事前有預警到
+        "missed": len(missed),                         # 沒預警到（漏報）
+        "miss_rate": round(len(missed) / total, 3) if total else None,
+        "missed_incidents": missed,
+    }

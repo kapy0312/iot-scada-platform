@@ -166,3 +166,18 @@ def test_雲端MCP_沒設定密碼一律拒絕():
     c = _client("")
     assert c.post("/mcp", headers={"Authorization": "Bearer "}).status_code == 401
     assert c.post("/mcp", headers={"Authorization": "Bearer anything"}).status_code == 401
+
+
+# ---------- 漏報率 ----------
+
+def test_漏報率():
+    from datetime import datetime, timezone
+    from core.warning_stats import miss_summary
+    t = datetime(2026, 11, 12, tzinfo=timezone.utc)
+    incidents = [{"id": 38, "device_id": "S", "started_at": t, "level": "warning"},
+                 {"id": 40, "device_id": "S", "started_at": t, "level": "danger"},
+                 {"id": 33, "device_id": "S", "started_at": t, "level": "warning"}]
+    m = miss_summary(incidents, {38})
+    assert (m["incidents_over_line"], m["warned"], m["missed"], m["miss_rate"]) == (3, 1, 2, 0.667)
+    assert [i["id"] for i in m["missed_incidents"]] == [40, 33]
+    assert miss_summary([], set())["miss_rate"] is None

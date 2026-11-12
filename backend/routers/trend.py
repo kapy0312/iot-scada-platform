@@ -7,7 +7,7 @@ import asyncpg
 from fastapi import APIRouter, Query
 
 import core.plc_simulator as plc
-from core.warning_stats import row_view as _row, summarize  # noqa: F401（history 也從這裡 import）
+from core.warning_stats import miss_summary, row_view as _row, summarize  # noqa: F401（history 也從這裡 import）
 from db.pool import acquire
 
 router = APIRouter()
@@ -34,12 +34,25 @@ async def trend_warnings(
                 ORDER BY started_at DESC
                 LIMIT $3
             """, device_id, hours, limit)
+            # 漏報：這段時間超過警戒／危險值的事件，事前有沒有 reached 預警連過去
+            incidents = [dict(r) for r in await conn.fetch("""
+                SELECT id, device_id, started_at, level FROM anomaly_incidents
+                WHERE device_id = $1 AND started_at > now() - make_interval(hours => $2)
+                  AND level IN ('warning', 'danger')
+                ORDER BY started_at DESC
+            """, device_id, hours)]
+            warned = {r["incident_id"] for r in await conn.fetch("""
+                SELECT DISTINCT incident_id FROM trend_warnings
+                WHERE outcome = 'reached' AND incident_id = ANY($1::bigint[])
+            """, [i["id"] for i in incidents])}
     except asyncpg.UndefinedTableError:
         return {"available": False, "message": "找不到 trend_warnings 表：請先執行 db/migrations/007_trend_warnings.sql",
                 "device_id": device_id, "hours": hours, "warnings": [], "summary": summarize([])}
     items = [_row(r) for r in rows]
+    misses = miss_summary(incidents, warned)
+    misses["missed_incidents"] = [{**i, "started_at": i["started_at"].isoformat()} for i in misses["missed_incidents"]]
     return {"available": True, "device_id": device_id, "hours": hours, "count": len(items),
-            "summary": summarize(items), "warnings": items}
+            "summary": summarize(items), "misses": misses, "warnings": items}
 
 
 async def pre_warnings_of(conn, incident_ids: list[int]) -> dict[int, list[dict]]:

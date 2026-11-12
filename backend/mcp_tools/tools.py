@@ -10,7 +10,7 @@ from mcp.types import ToolAnnotations
 
 from core.device_profile import ANOMALY_THRESHOLD, DEVICE_PROFILES, base_device_id, get_profile
 from core.oee import SHIFT_TZ, is_effective, shift_summary, shift_window
-from core.warning_stats import row_view, summarize as summarize_warnings
+from core.warning_stats import miss_summary, row_view, summarize as summarize_warnings
 from db import oee_repo
 from mcp_tools.common import (
     LOCAL_TZ, OUTCOME_TEXT, fmt, has_limit_columns, incident_view, parse_time, rnd, time_range,
@@ -278,8 +278,10 @@ def register(server, source: Source) -> dict:
 
         summary：hit_rate 命中率（真的到了 ÷（到了＋自己退了），中途停機的不算）、
         avg_lead_s 平均提前多少秒預警、avg_eta_error_s 預估誤差（正數＝實際比預估晚到）。
-        命中率只看「有發出的預警」：升得太快（一兩分鐘內就超標）的事件來不及預警，不會出現在這裡，
-        要評估有沒有漏報，請對照 list_anomalies 的事件。
+        命中率只看「有發出的預警」，所以另外附上漏報：misses 是這段時間真的超過警戒或危險值的事件中，
+        事前有幾次預警到（warned）、幾次沒預警到（missed、miss_rate），以及漏掉的事件清單。
+        升得太快（一兩分鐘內就超標）或後端剛啟動還在收集資料時，來不及預警，會算成漏報。
+        評估預警好不好，要同時看命中率（有沒有亂報）和漏報率（有沒有漏掉）。
         每筆預警含：訊號、目標等級、門檻、預估剩餘秒數（first_eta_s）、每分鐘上升量、結果（outcome）、
         實際提前量（lead_s）、對應的事件 incident_id。
         """
@@ -293,16 +295,31 @@ def register(server, source: Source) -> dict:
             sql += " AND device_id = $2"
             args.append(device_id)
         sql += " ORDER BY started_at DESC LIMIT 101"
+        inc_sql = """
+            SELECT id, device_id, started_at, level FROM anomaly_incidents
+            WHERE started_at > now() - make_interval(hours => $1) AND level IN ('warning', 'danger')
+        """ + (" AND device_id = $2" if device_id else "") + " ORDER BY started_at DESC"
         conn = await source.connect()
         try:
             try:
                 rows = await conn.fetch(sql, *args)
+                incidents = [dict(r) for r in await conn.fetch(inc_sql, *args)]
+                warned = {r["incident_id"] for r in await conn.fetch("""
+                    SELECT DISTINCT incident_id FROM trend_warnings
+                    WHERE outcome = 'reached' AND incident_id = ANY($1::bigint[])
+                """, [i["id"] for i in incidents])}
             except Exception as e:
                 if "does not exist" in str(e):
                     raise ToolError("還沒有趨勢預警紀錄表（需要 migration 007 或雲端 004）") from e
                 raise
         finally:
             await conn.close()
+        misses = miss_summary(incidents, warned)
+        misses["missed_incidents"] = [
+            {"incident_id": i["id"], "device_id": i["device_id"], "start": fmt(i["started_at"]),
+             "level": "危險" if i["level"] == "danger" else "警戒"}
+            for i in misses["missed_incidents"]
+        ]
         items = [row_view(r) for r in rows[:100]]
         stats = summarize_warnings(items)
         for it in items:
@@ -314,6 +331,7 @@ def register(server, source: Source) -> dict:
             "range_hours": hours,
             "device_id": device_id,
             "summary": stats,
+            "misses": misses,
             "count": len(items),
             "warnings": items,
             "note": "只列出最近 100 筆" if len(rows) > 100 else None,
