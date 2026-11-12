@@ -69,3 +69,14 @@ def masked(url: str) -> str:
     cred, host = rest.rsplit("@", 1)
     user = cred.split(":", 1)[0]
     return f"{scheme}://{user}:***@{host}"
+
+
+RAG_BACKENDS = ("qdrant", "pgvector")
+
+
+def rag_backend() -> str:
+    """手冊向量查詢用哪一邊：qdrant（預設，過渡期）或 pgvector；寫入（上傳、刪除、勾選）兩邊都寫"""
+    value = os.getenv("RAG_BACKEND", "qdrant").strip().lower()
+    if value not in RAG_BACKENDS:
+        raise ConfigError(f"RAG_BACKEND={value!r} 看不懂，只能是 {' 或 '.join(RAG_BACKENDS)}（設在 {ENV_FILE}）")
+    return value

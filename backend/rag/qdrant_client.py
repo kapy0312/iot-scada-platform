@@ -28,6 +28,44 @@ async def upsert_chunks(points: list[PointStruct]):
     await _client.upsert(collection_name=COLLECTION_NAME, points=points)
 
 
+async def add_document(doc: dict, chunks: list[dict]) -> None:
+    """跟 pgvector_store.add_document 一樣的參數；payload 欄位維持原本的寫法"""
+    points = [
+        PointStruct(
+            id=str(c["id"]),
+            vector=c["vector"],
+            payload={
+                "device_id": doc["device_id"],
+                "source_filename": doc["filename"],
+                "doc_title": doc.get("doc_title"),
+                "section": c.get("section"),
+                "page": c.get("page"),
+                "chunk_index": c["chunk_index"],
+                "text": c["text"],
+                "file_hash": doc["file_hash"],
+                "enabled": doc.get("enabled", True),
+                "chunker_version": doc.get("chunker_version"),
+            },
+        )
+        for c in chunks
+    ]
+    await upsert_chunks(points)
+
+
+async def scroll_all(with_vectors: bool = True, page_size: int = 256) -> list:
+    """全部的 point（分頁讀完；list_documents 只讀前 1000 筆，搬移時不能漏）"""
+    await ensure_collection()
+    out, offset = [], None
+    while True:
+        points, offset = await _client.scroll(
+            collection_name=COLLECTION_NAME, limit=page_size, offset=offset,
+            with_payload=True, with_vectors=with_vectors,
+        )
+        out.extend(points)
+        if offset is None:
+            return out
+
+
 async def search(query_vector: list[float], device_id: str | None = None, top_k: int = 3):
     await ensure_collection()
     must_conditions = []

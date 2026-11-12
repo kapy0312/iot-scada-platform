@@ -11,6 +11,7 @@ import {
   type TagSpec,
 } from "../deviceProfile";
 import { DangerIcon, WarningIcon } from "./Icons";
+import type { Attention } from "../hooks/useAlarmAttention";
 import { LINE_TEXT, etaText, fixedWindow, isForecast, levelKind, numbersOf, pct } from "./hmi";
 import "./hmi.css";
 
@@ -21,6 +22,8 @@ interface Props {
   history?: PlcData[];
   /** 點卡片時開啟該訊號的詳細趨勢 */
   onOpenTrend?: (tag: TagKey) => void;
+  /** 各訊號的告警是否還在閃（剛跨過門檻、危險還沒按知道了） */
+  attention?: Record<string, Attention>;
 }
 
 const SPARK_SECONDS = 300;
@@ -80,16 +83,20 @@ function statusLine(spec: TagSpec, level: Level | null, trend: TagTrend | undefi
 }
 
 function AnalogIndicator({
+  id,
   spec,
   value,
   history,
   trend,
+  flashing,
   onOpen,
 }: {
+  id?: string;
   spec: TagSpec;
   value: number | null;
   history: number[];
   trend?: TagTrend;
+  flashing?: boolean;
   onOpen?: () => void;
 }) {
   const [scaleMin, scaleMax] = spec.scale;
@@ -107,6 +114,7 @@ function AnalogIndicator({
     "ind",
     onOpen ? "hmi-card" : "",
     kind === "warning" || kind === "danger" ? `hmi-st-${kind}` : forecast ? "hmi-st-forecast" : kind === "dev" ? "hmi-st-dev" : "",
+    flashing && (kind === "warning" || kind === "danger") ? "alarm-flash" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -115,6 +123,7 @@ function AnalogIndicator({
 
   return (
     <div
+      id={id}
       className={cardClass}
       onClick={onOpen}
       role={onOpen ? "button" : undefined}
@@ -123,6 +132,11 @@ function AnalogIndicator({
       aria-label={onOpen ? `${spec.label}，${valueText} ${spec.unit}，${statusLine(spec, level, trend)}。按下看詳細趨勢` : undefined}
       title={`${spec.tag_no} ${spec.label}｜正常 ${spec.normal[0]}–${spec.normal[1]}、警戒 ${spec.warning}、危險 ${spec.danger} ${spec.unit}`}
     >
+      {(kind === "warning" || kind === "danger") && (
+        <span className={`hmi-badge ${kind}`} aria-hidden="true">
+          {kind === "danger" ? "危險" : "警戒"}
+        </span>
+      )}
       <div className="hmi-name">{spec.label}</div>
 
       <div className="hmi-val">
@@ -170,7 +184,7 @@ function AnalogIndicator({
 }
 
 /** 製程簡圖上的儀表：圓圈＋代號，下面直接標名稱與目前值 */
-function Instrument({ spec, value, trend }: { spec: TagSpec; value: number | null; trend?: TagTrend }) {
+function Instrument({ spec, value, trend, flashing }: { spec: TagSpec; value: number | null; trend?: TagTrend; flashing?: boolean }) {
   const lv = value === null ? "normal" : evaluate(spec, value);
   const forecast = isForecast(trend);
   const cls =
@@ -182,7 +196,10 @@ function Instrument({ spec, value, trend }: { spec: TagSpec; value: number | nul
   const valCls = lv === "danger" ? "danger" : lv === "warning" || forecast ? "warning" : "";
   return (
     <div className="equip">
-      <div className={cls} title={`${spec.tag_no} ${spec.label}`}>{instrumentCode(spec)}</div>
+      <div
+        className={`${cls}${flashing && (lv === "danger" || lv === "warning") ? " alarm-flash" : ""}`}
+        title={`${spec.tag_no} ${spec.label}`}
+      >{instrumentCode(spec)}</div>
       <span className="cap">{spec.label}</span>
       <span className={`inst-val ${valCls}`}>
         {value === null ? "—" : value.toFixed(spec.decimals)}
@@ -200,7 +217,7 @@ function Pipe({ grow = 1 }: { grow?: number }) {
 // 壓力計裝在泵浦出口；其餘儀表（轉速、溫度、振動、電流）都量測馬達本體
 const PUMP_SIDE_CODES = new Set(["PT", "FT"]);
 
-export default function ProcessOverview({ data, profile, history, onOpenTrend }: Props) {
+export default function ProcessOverview({ data, profile, history, onOpenTrend, attention }: Props) {
   const running = data ? Boolean(data.motor_enable) : null;
   const keys = tagKeys(profile);
   const trend: TrendInfo | undefined = data?.trend;
@@ -229,7 +246,7 @@ export default function ProcessOverview({ data, profile, history, onOpenTrend }:
         {motorSide.map((k) => (
           <div key={k} style={{ display: "contents" }}>
             <Pipe />
-            <Instrument spec={profile.tags[k]} value={getValue(data, k)} trend={trend?.tags[k]} />
+            <Instrument spec={profile.tags[k]} value={getValue(data, k)} trend={trend?.tags[k]} flashing={attention?.[k]?.flashing} />
           </div>
         ))}
         <Pipe />
@@ -241,7 +258,7 @@ export default function ProcessOverview({ data, profile, history, onOpenTrend }:
         {pumpSide.map((k) => (
           <div key={k} style={{ display: "contents" }}>
             <Pipe grow={2} />
-            <Instrument spec={profile.tags[k]} value={getValue(data, k)} trend={trend?.tags[k]} />
+            <Instrument spec={profile.tags[k]} value={getValue(data, k)} trend={trend?.tags[k]} flashing={attention?.[k]?.flashing} />
           </div>
         ))}
         <Pipe grow={2} />
@@ -264,10 +281,12 @@ export default function ProcessOverview({ data, profile, history, onOpenTrend }:
         {keys.map((k) => (
           <AnalogIndicator
             key={k}
+            id={`ind-${k}`}
             spec={profile.tags[k]}
             value={getValue(data, k)}
             history={numbersOf(recent, k)}
             trend={trend?.tags[k]}
+            flashing={attention?.[k]?.flashing}
             onOpen={onOpenTrend ? () => onOpenTrend(k) : undefined}
           />
         ))}

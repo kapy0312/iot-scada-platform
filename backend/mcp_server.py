@@ -28,7 +28,7 @@ from core import limits
 from core.device_profile import ANOMALY_THRESHOLD, DEVICE_PROFILES, LEVEL_TEXT, base_device_id, evaluate, get_profile
 from core.incidents import DIAGNOSIS_TYPES, diagnosis_type
 from rag.embedder import embed_text
-from rag.qdrant_client import list_documents, search as qdrant_search
+from rag import store as manual_store
 
 LOCAL_TZ = ZoneInfo("Asia/Taipei")
 MAX_TREND_POINTS = 240      # 趨勢最多回傳幾個時間點，避免塞爆對話
@@ -95,14 +95,16 @@ async def _connect_db():
     return conn
 
 
-async def _qdrant_call(coro):
+async def _manual_call(coro):
     try:
         return await coro
     except Exception as e:
-        raise ToolError(
-            f"無法查詢手冊向量庫（{type(e).__name__}）。請確認 scada-qdrant 容器已啟動（port 6343）："
-            "docker start scada-qdrant"
-        ) from e
+        if manual_store.backend_name() == "pgvector":
+            hint = ("請確認 timescaledb 容器已啟動（docker start timescaledb），"
+                    "並已執行 db/migrations/009_manual_vectors.sql")
+        else:
+            hint = "請確認 scada-qdrant 容器已啟動（port 6343）：docker start scada-qdrant"
+        raise ToolError(f"無法查詢手冊向量庫 {manual_store.backend_name()}（{type(e).__name__}）。{hint}") from e
 
 
 async def _embed(text: str) -> list[float]:
@@ -295,7 +297,7 @@ async def search_manual(query: str, device_id: str = "S7-1511T", top_k: int = 5)
     top_k = max(1, min(top_k, 10))
     manual_device = base_device_id(device_id)
     vector = await _embed(query)
-    results = await _qdrant_call(qdrant_search(vector, device_id=manual_device, top_k=top_k))
+    results = await _manual_call(manual_store.search(vector, device_id=manual_device, top_k=top_k))
     return {
         "device_id": manual_device,
         "query": query,
@@ -334,7 +336,7 @@ async def get_device_info(device_id: str = "S7-1511T") -> dict:
         await conn.close()
 
     manual_device = base_device_id(device_id)
-    docs = [d for d in await _qdrant_call(list_documents()) if d.get("device_id") == manual_device]
+    docs = [d for d in await _manual_call(manual_store.list_documents()) if d.get("device_id") == manual_device]
 
     return {
         "device_id": device_id,

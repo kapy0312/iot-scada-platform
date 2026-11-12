@@ -15,9 +15,12 @@ interface Props {
   user: AuthUser | null;
   onLogin: () => void;
   onLogout: () => void;
+  soundOn: boolean;
+  soundBlocked: boolean;        // 開著但瀏覽器還不准出聲（重新整理後要先點一下頁面）
+  onToggleSound: () => void;
 }
 
-export default function StatusBar({ deviceName, source, isConnected, lastUpdate, alarms, forecastCount = 0, theme, onToggleTheme, user, onLogin, onLogout }: Props) {
+export default function StatusBar({ deviceName, source, isConnected, lastUpdate, alarms, forecastCount = 0, theme, onToggleTheme, user, onLogin, onLogout, soundOn, soundBlocked, onToggleSound }: Props) {
   const top = alarms[0]?.level;
   const chipClass = top === "danger" ? "chip danger" : top === "warning" ? "chip warning" : "chip";
   const time = lastUpdate
@@ -51,6 +54,15 @@ export default function StatusBar({ deviceName, source, isConnected, lastUpdate,
         {top === "warning" && <WarningIcon size={16} />}
         {alarms.length > 0 ? `作用中告警 ${alarms.length}` : "無告警"}
       </div>
+      <button
+        type="button"
+        className="btn ghost"
+        aria-pressed={soundOn}
+        onClick={onToggleSound}
+        title={soundBlocked ? "瀏覽器要先點一下頁面才能出聲" : "危險告警還沒按「知道了」時，每 2 秒嗶一聲"}
+      >
+        警報聲：{soundOn ? (soundBlocked ? "開（點頁面啟用）" : "開") : "關"}
+      </button>
       {user ? (
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <span className="small">操作員 <strong>{user.username}</strong></span>

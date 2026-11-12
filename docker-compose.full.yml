@@ -30,6 +30,8 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}@timescaledb:5432/iotscada
       QDRANT_URL: http://qdrant:6333
+      # 手冊向量查詢用哪一邊：qdrant（預設）或 pgvector；上傳、刪除、勾選兩邊都寫（Phase 2 過渡期）
+      RAG_BACKEND: ${RAG_BACKEND:-qdrant}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
       SESSION_HOURS: ${SESSION_HOURS:-12}
       CLOUD_SYNC_ENABLED: ${CLOUD_SYNC_ENABLED:-false}

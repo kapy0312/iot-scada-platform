@@ -20,14 +20,27 @@
 /* 只有異常時才上色（ISA-101）：偏離＝邊框變亮；預警＝虛線框（還沒到，不填色）；警戒／危險＝實線框＋淡淡底色 */
 .indicators .ind.hmi-st-dev { border-color: var(--muted); }
 .indicators .ind.hmi-st-forecast { border: 2px dashed var(--warn-mark); padding: 15px 17px 11px; }
+/* 警戒／危險要一眼看得出來：4px 粗框＋明顯底色＋右上角標籤（padding 少 3px，卡片大小不變） */
 .indicators .ind.hmi-st-warning {
-  border: 2px solid var(--warn-mark); padding: 15px 17px 11px;
-  background: color-mix(in srgb, var(--card-bg) 88%, var(--warn-mark) 12%);
+  border: 4px solid var(--warn-mark); padding: 13px 15px 9px;
+  background: color-mix(in srgb, var(--card-bg) 72%, var(--warn-mark) 28%);
 }
 .indicators .ind.hmi-st-danger {
-  border: 2px solid var(--danger-mark); padding: 15px 17px 11px;
-  background: color-mix(in srgb, var(--card-bg) 86%, var(--danger-mark) 14%);
+  border: 4px solid var(--danger-mark); padding: 13px 15px 9px;
+  background: color-mix(in srgb, var(--card-bg) 62%, var(--danger-mark) 38%);
 }
+.indicators .ind.hmi-st-warning .hmi-name,
+.indicators .ind.hmi-st-danger .hmi-name { padding-right: 56px; font-weight: 700; }
+.indicators .ind.hmi-st-danger .hmi-num { font-size: 50px; color: var(--text); } /* 卡片已整張紅底，數字用深色才看得清楚 */
+.indicators .ind.hmi-st-danger .hmi-status.danger { color: var(--text); font-weight: 700; }
+
+.hmi-badge {
+  position: absolute; top: 0; right: 0; padding: 4px 12px;
+  border-bottom-left-radius: 6px; font-size: 15px; font-weight: 700; letter-spacing: 1px;
+  color: var(--panel);
+}
+.hmi-badge.warning { background: var(--warn-mark); }
+.hmi-badge.danger  { background: var(--danger-mark); }
 
 .hmi-name { font-size: 18px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 

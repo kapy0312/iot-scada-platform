@@ -16,6 +16,8 @@ export default function RagPanel() {
   const [deviceId, setDeviceId] = useState("S7-1511T");
   const [file, setFile] = useState<File | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  // 目前搜尋用哪個向量庫（Phase 2 過渡期：qdrant 或 pgvector，上傳刪除兩邊都寫）
+  const [backend, setBackend] = useState<string | null>(null);
 
   const fetchDocuments = async () => {
     setLoading(true);
@@ -23,6 +25,7 @@ export default function RagPanel() {
       const res = await apiFetch("/api/rag/documents");
       const data = await res.json();
       setDocuments(data.documents ?? []);
+      setBackend(typeof data.backend === "string" ? data.backend : null);
     } catch {
       setMessage({ ok: false, text: "無法取得文件清單" });
     } finally {
@@ -93,6 +96,11 @@ export default function RagPanel() {
     <section className="panel" aria-labelledby="rag-h">
       <div className="panel-head">
         <h2 id="rag-h" className="panel-title">設備手冊（RAG 知識庫）</h2>
+        {backend && (
+          <span className="small muted" title="RAG_BACKEND 設定；上傳、刪除、勾選會同時寫入 Qdrant 與 pgvector">
+            搜尋向量庫：<strong className="mono">{backend === "pgvector" ? "pgvector（TimescaleDB）" : "Qdrant"}</strong>
+          </span>
+        )}
       </div>
       <p className="small muted" style={{ marginTop: 0 }}>
         上傳 PDF 後會依章節切段並轉成向量。AI 診斷只會參考有勾選的手冊。device_id 填設備型號（例如 S7-1511T），模擬資料共用同一份手冊。

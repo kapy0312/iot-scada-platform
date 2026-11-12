@@ -232,6 +232,35 @@ table.table { width: 100%; min-width: 760px; border-collapse: collapse; font-siz
   .panel { padding: 14px; }
 }
 
+/* ---------- 告警閃爍與頂部橫幅 ---------- */
+/* 閃爍用外圈光暈（box-shadow），不改邊框粗細，畫面不會跳動 */
+@keyframes alarm-flash-warn { 50% { box-shadow: 0 0 0 6px var(--warn-mark); } }
+@keyframes alarm-flash-danger { 50% { box-shadow: 0 0 0 7px var(--danger-mark); } }
+.alarm-flash.hmi-st-warning, .inst.warning.alarm-flash { animation: alarm-flash-warn 1s steps(1, end) infinite; }
+.alarm-flash.hmi-st-danger, .inst.danger.alarm-flash { animation: alarm-flash-danger 0.8s steps(1, end) infinite; }
+
+.alarm-banner {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  padding: 8px 20px; font-size: 17px; font-weight: 700; color: var(--panel);
+}
+.alarm-banner.warning { background: var(--warn-mark); }
+.alarm-banner.danger { background: var(--danger-mark); }
+.alarm-banner .ab-level { display: inline-flex; align-items: center; gap: 6px; font-size: 19px; letter-spacing: 2px; }
+.alarm-banner .ab-text {
+  flex: 1 1 280px; min-width: 0; text-align: left; font: inherit; color: inherit;
+  background: none; border: none; padding: 4px 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px;
+}
+.alarm-banner span.ab-text { cursor: default; text-decoration: none; }
+.alarm-banner .ab-more { font-weight: 400; }
+.alarm-banner .ab-ack { min-height: 36px; background: var(--panel); color: var(--text); border-color: var(--panel); }
+@keyframes ab-flash { 50% { filter: brightness(1.35); } }
+.alarm-banner.flash .ab-level { animation: ab-flash 0.8s steps(1, end) infinite; }
+
 @media (prefers-reduced-motion: reduce) {
   .bar .pointer { transition: none; }
+  /* 不閃，改用固定的粗外圈表示「還沒看過」 */
+  .alarm-flash.hmi-st-warning, .inst.warning.alarm-flash { animation: none; box-shadow: 0 0 0 4px var(--warn-mark); }
+  .alarm-flash.hmi-st-danger, .inst.danger.alarm-flash { animation: none; box-shadow: 0 0 0 5px var(--danger-mark); }
+  .alarm-banner.flash .ab-level { animation: none; }
 }

@@ -3,10 +3,13 @@ import { useEffect, useState } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useTheme } from "./hooks/useTheme";
 import { useAlarms } from "./hooks/useAlarms";
+import { useAlarmAttention } from "./hooks/useAlarmAttention";
+import { useAlarmSound } from "./hooks/useAlarmSound";
 import { useAuth } from "./hooks/useAuth";
 import { useDeviceProfile, type TagKey } from "./deviceProfile";
 import { WS_URL } from "./config";
 import StatusBar from "./components/StatusBar";
+import AlarmBanner from "./components/AlarmBanner";
 import ProcessOverview from "./components/ProcessOverview";
 import TrendDialog from "./components/TrendDialog";
 import AlarmPanel, {
@@ -47,6 +50,25 @@ export default function App() {
     data?.limits_version,
   );
   const alarms = useAlarms(data, profile, threshold);
+  const { attention, acknowledge, flashingDanger, anyFlashing } = useAlarmAttention(alarms, data?.timestamp);
+  const sound = useAlarmSound(flashingDanger);
+
+  // 分頁標題加上告警等級：切到別的瀏覽器分頁也看得到
+  const topLevel = alarms[0]?.level;
+  useEffect(() => {
+    const base = "IIoT SCADA 監控";
+    document.title = topLevel === "danger" ? `⚠ 危險｜${base}` : topLevel === "warning" ? `⚠ 警戒｜${base}` : base;
+  }, [topLevel]);
+
+  // 橫幅點文字：切回監控頁並捲到那張卡片
+  const locateTag = (tag: string) => {
+    setTab("monitor");
+    window.setTimeout(() => {
+      const el = document.getElementById(`ind-${tag}`);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      el?.focus({ preventScroll: true });
+    }, 0);
+  };
   const forecastCount = Object.values(data?.trend?.tags ?? {}).filter((t) => t.state === "forecast").length;
   const liveState = data?.production?.state;
   const oee = useOeeCurrent(deviceId, liveState);
@@ -82,6 +104,17 @@ export default function App() {
         user={auth.user}
         onLogin={auth.openDialog}
         onLogout={auth.logout}
+        soundOn={sound.enabled}
+        soundBlocked={sound.blocked}
+        onToggleSound={sound.toggle}
+      />
+
+      <AlarmBanner
+        alarms={alarms}
+        flashing={anyFlashing}
+        canAcknowledge={flashingDanger}
+        onAcknowledge={acknowledge}
+        onLocate={locateTag}
       />
 
       <nav className="tabs" role="tablist" aria-label="畫面分頁">
@@ -108,6 +141,7 @@ export default function App() {
                   data={data}
                   profile={profile}
                   history={history}
+                  attention={attention}
                   onOpenTrend={setTrendTag}
                 />
                 {/* 事件紀錄放在左欄卡片下方，跟右欄高度接近，不再留下一大片空白 */}

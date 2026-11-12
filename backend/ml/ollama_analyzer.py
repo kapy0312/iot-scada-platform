@@ -5,7 +5,7 @@ import re
 import httpx
 
 from rag.embedder import embed_text
-from rag.qdrant_client import search as qdrant_search
+from rag.store import search as manual_search
 from core.device_profile import LEVEL_TEXT, base_device_id, evaluate, get_profile
 from db.pool import acquire
 
@@ -206,7 +206,7 @@ async def retrieve_manual(values: dict, device_id: str) -> list[dict]:
     try:
         vector = await embed_text(query_text)
         # 手冊依設備型號存放：模擬資料（-MOCK、-SIM）也要查 S7-1511T 的手冊
-        results = await qdrant_search(vector, device_id=base_device_id(device_id), top_k=RAG_CANDIDATES)
+        results = await manual_search(vector, device_id=base_device_id(device_id), top_k=RAG_CANDIDATES)
     except Exception as e:
         print(f"[RAG] 手冊檢索失敗：{e}")
         return []
