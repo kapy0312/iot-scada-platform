@@ -32,7 +32,7 @@ export function useAlarms(data: PlcData | null, profile: DeviceProfile, threshol
         key: id,
         level,
         since: 0,
-        text: `${spec.label} ${spec.tag_no} ${value.toFixed(spec.decimals)} ${spec.unit}，${level === "danger" ? "危險" : "警戒"} ${limit}`,
+        text: `${spec.label} ${spec.tag_no} ${value.toFixed(spec.decimals)} ${spec.unit}（超過${level === "danger" ? "危險" : "警戒"}值 ${limit}）`,
       });
     }
 

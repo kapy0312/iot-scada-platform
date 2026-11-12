@@ -243,6 +243,15 @@ def test_API_預警紀錄與事件的事前預警(monkeypatch):
         temp = next(w for w in out["warnings"] if w["tag_name"] == "temperature")
         assert temp["lead_s"] == 600 and temp["incident_id"] == inc
         assert out["summary"]["hit_rate"] == 0.5 and out["summary"]["avg_lead_s"] == 600
+        # 漏報率從第一筆預警開始算：預警功能上線前的超標事件不算
+        await conn.execute("""
+            INSERT INTO anomaly_incidents (device_id, started_at, ended_at, level, severity, peak)
+            VALUES ($1, $2, $2, 'danger', 4, '{}')
+        """, DEV, start - timedelta(minutes=5))
+        out = await trend_api.trend_warnings(device_id=DEV, hours=24, limit=10)
+        m = out["misses"]
+        assert (m["excluded_before_feature"], m["incidents_over_line"], m["warned"], m["miss_rate"]) == (1, 1, 1, 0.0)
+        assert m["counted_since"] is not None
 
         incs = await get_incidents(device_id=DEV, hours=24, limit=10)
         pre = incs["incidents"][0]["pre_warnings"]

@@ -43,16 +43,24 @@ def row_view(r) -> dict:
     }
 
 
-def miss_summary(incidents: list[dict], warned_ids: set[int]) -> dict:
+def miss_summary(incidents: list[dict], warned_ids: set[int], since=None) -> dict:
     """
     漏報：真的超過警戒或危險值的事件，事前有沒有預警到（有一筆 reached 預警連到這個事件就算有）
     incidents：level 是 warning／danger 的事件（id、started_at、level、device_id）
+    since：趨勢預警功能開始運作的時間（第一筆預警的 started_at）；在這之前的事件不可能被預警，不算進漏報率
     只有偏高、偏低、或只有 ML 異常的事件不算：趨勢預警只預估「往上越過警戒、危險值」
     """
-    total = len(incidents)
-    missed = [i for i in incidents if i["id"] not in warned_ids]
+    if since is None:
+        counted, before = [], len(incidents)      # 從來沒有預警紀錄：功能還沒運作過，全部不算
+    else:
+        counted = [i for i in incidents if i["started_at"] >= since]
+        before = len(incidents) - len(counted)
+    total = len(counted)
+    missed = [i for i in counted if i["id"] not in warned_ids]
     return {
-        "incidents_over_line": total,                  # 這段時間超過警戒或危險值的事件數
+        "counted_since": since.isoformat() if since is not None else None,   # 從什麼時候開始算
+        "excluded_before_feature": before,             # 預警功能上線前的超標事件（不算）
+        "incidents_over_line": total,                  # 起算後超過警戒或危險值的事件數
         "warned": total - len(missed),                 # 事前有預警到
         "missed": len(missed),                         # 沒預警到（漏報）
         "miss_rate": round(len(missed) / total, 3) if total else None,

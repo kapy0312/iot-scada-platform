@@ -177,7 +177,25 @@ def test_漏報率():
     incidents = [{"id": 38, "device_id": "S", "started_at": t, "level": "warning"},
                  {"id": 40, "device_id": "S", "started_at": t, "level": "danger"},
                  {"id": 33, "device_id": "S", "started_at": t, "level": "warning"}]
-    m = miss_summary(incidents, {38})
+    m = miss_summary(incidents, {38}, t)
     assert (m["incidents_over_line"], m["warned"], m["missed"], m["miss_rate"]) == (3, 1, 2, 0.667)
     assert [i["id"] for i in m["missed_incidents"]] == [40, 33]
-    assert miss_summary([], set())["miss_rate"] is None
+    assert m["excluded_before_feature"] == 0
+    assert miss_summary([], set(), t)["miss_rate"] is None
+
+
+def test_漏報率_功能上線前的事件不算():
+    from datetime import datetime, timedelta, timezone
+    from core.warning_stats import miss_summary
+    launch = datetime(2026, 11, 11, 9, 50, tzinfo=timezone.utc)          # 第一筆預警
+    incidents = [{"id": 41, "device_id": "S", "started_at": launch + timedelta(days=1), "level": "warning"},
+                 {"id": 40, "device_id": "S", "started_at": launch + timedelta(hours=18), "level": "danger"},
+                 {"id": 33, "device_id": "S", "started_at": launch - timedelta(minutes=12), "level": "warning"},
+                 {"id": 18, "device_id": "S", "started_at": launch - timedelta(days=6), "level": "warning"}]
+    m = miss_summary(incidents, {41}, launch)
+    assert (m["excluded_before_feature"], m["incidents_over_line"], m["missed"], m["miss_rate"]) == (2, 2, 1, 0.5)
+    assert [i["id"] for i in m["missed_incidents"]] == [40]
+    assert m["counted_since"] == launch.isoformat()
+    # 從來沒有預警紀錄：全部不算，漏報率是 None（不是 100%）
+    n = miss_summary(incidents, set(), None)
+    assert (n["excluded_before_feature"], n["incidents_over_line"], n["miss_rate"]) == (4, 0, None)

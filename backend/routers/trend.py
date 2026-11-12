@@ -45,11 +45,13 @@ async def trend_warnings(
                 SELECT DISTINCT incident_id FROM trend_warnings
                 WHERE outcome = 'reached' AND incident_id = ANY($1::bigint[])
             """, [i["id"] for i in incidents])}
+            # 預警功能開始運作的時間＝全部設備第一筆預警；之前的事件不算漏報
+            since = await conn.fetchval("SELECT min(started_at) FROM trend_warnings")
     except asyncpg.UndefinedTableError:
         return {"available": False, "message": "找不到 trend_warnings 表：請先執行 db/migrations/007_trend_warnings.sql",
                 "device_id": device_id, "hours": hours, "warnings": [], "summary": summarize([])}
     items = [_row(r) for r in rows]
-    misses = miss_summary(incidents, warned)
+    misses = miss_summary(incidents, warned, since)
     misses["missed_incidents"] = [{**i, "started_at": i["started_at"].isoformat()} for i in misses["missed_incidents"]]
     return {"available": True, "device_id": device_id, "hours": hours, "count": len(items),
             "summary": summarize(items), "misses": misses, "warnings": items}
