@@ -1,0 +1,14 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "iot-scada-mcp"
+resolve_s3 = true
+s3_prefix = "iot-scada-mcp"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "SecretName=\"iot-scada/mcp\""
+image_repositories = ["McpFunction=158343035643.dkr.ecr.us-east-1.amazonaws.com/iotscadamcp5bffc702/mcpfunction50c63f0drepo"]
+
+[default.global.parameters]
+region = "us-east-1"

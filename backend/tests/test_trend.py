@@ -262,3 +262,18 @@ def test_到了之後在警戒值附近晃不會重複預警():
     warns = [e for e in starts(events) if e["target_level"] == "warning"]
     assert len(warns) == 2, [(e["started_at"], e["first_eta_s"]) for e in warns]
     assert warns[1]["started_at"] > 1800
+
+
+def test_預警危險值後掉回來_不能算命中():
+    # 先升過 85（警戒）再往 100（危險）升，危險預警亮起後降回 80：危險值沒到，結果要是 cleared
+    def temp(t):
+        if t < 1400:
+            return 70 + t / 60                       # 1400 秒時約 93.3
+        return max(80.0, 93.3 - (t - 1400) / 10)     # 之後每 10 秒降 1 度，停在 80
+    tr = TrendTracker()
+    events = run(tr, 2200, temp)
+    dangers = [e for e in ends(events) if e["target_level"] == "danger"]
+    assert dangers, "危險值預警應該有亮過"
+    assert all(e["outcome"] == "cleared" and e["reached_at"] is None for e in dangers)
+    warnings = [e for e in ends(events) if e["target_level"] == "warning"]
+    assert warnings and warnings[0]["outcome"] == "reached"     # 警戒值真的到了，仍算命中

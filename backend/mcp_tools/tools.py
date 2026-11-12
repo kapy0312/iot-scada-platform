@@ -278,6 +278,8 @@ def register(server, source: Source) -> dict:
 
         summary：hit_rate 命中率（真的到了 ÷（到了＋自己退了），中途停機的不算）、
         avg_lead_s 平均提前多少秒預警、avg_eta_error_s 預估誤差（正數＝實際比預估晚到）。
+        命中率只看「有發出的預警」：升得太快（一兩分鐘內就超標）的事件來不及預警，不會出現在這裡，
+        要評估有沒有漏報，請對照 list_anomalies 的事件。
         每筆預警含：訊號、目標等級、門檻、預估剩餘秒數（first_eta_s）、每分鐘上升量、結果（outcome）、
         實際提前量（lead_s）、對應的事件 incident_id。
         """

@@ -1,0 +1,52 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  IIoT SCADA cloud MCP (Phase 3) - read-only MCP server on Lambda,
+  Tiger Cloud (mcp_reader) + DeepInfra embedding, Bearer token checked in app
+
+# 部署（在 backend/mcp_cloud 資料夾）：
+#   第一次：sam build ; sam deploy --guided
+#   之後改程式：sam build ; sam deploy
+# 設定值（Tiger 唯讀連線、DeepInfra 金鑰、MCP 密碼）放在 Secrets Manager，不寫在這份範本裡
+
+Parameters:
+  SecretName:
+    Type: String
+    Default: iot-scada/mcp
+    Description: Secrets Manager secret (JSON with TIGER_READER_URL, DEEPINFRA_API_KEY, MCP_AUTH_TOKEN)
+
+Resources:
+  McpFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ..                  # 建置用 backend 資料夾（需要 core、db、rag、mcp_tools）
+      Dockerfile: mcp_cloud/Dockerfile
+      DockerTag: latest
+    Properties:
+      FunctionName: iot-scada-mcp
+      PackageType: Image
+      Architectures: [x86_64]
+      MemorySize: 512
+      Timeout: 60
+      Environment:
+        Variables:
+          SECRET_ID: !Ref SecretName
+      Policies:                          # 只能讀這一個 secret（ARN 結尾有 AWS 自動加的 6 碼亂數）
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretName}-*
+      FunctionUrlConfig:
+        AuthType: NONE                   # AWS 這層不驗證；程式裡檢查 Bearer 密碼（跟 rag-platform 私人入口一樣）
+        InvokeMode: BUFFERED
+
+  McpLogGroup:                           # log 保留 14 天（不設的話永久保留）
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/iot-scada-mcp
+      RetentionInDays: 14
+
+Outputs:
+  McpUrl:
+    Description: URL for the claude.ai custom connector
+    Value: !Sub "${McpFunctionUrl.FunctionUrl}mcp"

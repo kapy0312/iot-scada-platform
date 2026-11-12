@@ -264,11 +264,19 @@ class TrendTracker:
             st.on_streak = 0
             st.reached.clear()
 
-        # 預警中，這條線已經到了：結束為 reached（現有規格告警會接手）
-        if ep and (r["state"] == ABOVE or (r.get("target") and r["target"] != ep["target_level"])):
+        # 預警中，數值真的到了預警的那條線：結束為 reached（現有規格告警會接手）
+        # 只看「目前值 ≥ 那條線」。以前用「目標換了」判斷，預警危險值時數值掉回警戒值以下，
+        # 目標會從危險變回警戒，也被當成 reached（實際沒到），命中率因此虛高
+        cur = r.get("current")
+        if ep and (r["state"] == ABOVE or (cur is not None and cur >= ep["threshold"])):
             events.append(self._end(tag, st, "reached", now))
             ep = None
             st.on_streak = 0        # 下一條線（危險值）要重新連續成立 3 次才預警
+        # 預警危險值時數值掉回警戒值以下：這次預警沒有成真，結束為 cleared（自己退了）
+        elif ep and r.get("target") and LEVELS.index(r["target"]) < LEVELS.index(ep["target_level"]):
+            events.append(self._end(tag, st, "cleared", now, r))
+            ep = None
+            st.on_streak = 0
 
         if r["candidate"]:
             st.on_streak += 1
