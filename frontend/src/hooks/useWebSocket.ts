@@ -25,6 +25,36 @@ export interface ProductionStatus {
   product_id: number | null;
 }
 
+/** 趨勢預警：每個訊號一筆（後端 core/trend.py） */
+export type TrendState = "collecting" | "stable" | "rising" | "forecast" | "above";
+export interface TagTrend {
+  state: TrendState;
+  points?: number;              // collecting：已收幾筆 10 秒平均
+  need?: number;                // collecting：要幾筆才開始推估
+  target?: "warning" | "danger";
+  threshold?: number;
+  eta_s?: number | null;        // 預估幾秒後到 target
+  eta_danger_s?: number | null; // target 是警戒時，順便估危險值
+  slope_per_min?: number;
+  current?: number;
+  since?: number;               // forecast：預警開始時間（unix 秒）
+}
+export interface TrendInfo {
+  status: string;               // 跟 RunGate 相同：active / paused_stopped / paused_recovering…
+  window_s: number;
+  min_s: number;
+  horizon_s: number;
+  updated_at: number | null;
+  device_id?: string;
+  tags: Record<string, TagTrend>;
+}
+export interface MockDrift {
+  tag: string;
+  rate_per_min: number;
+  offset: number;
+  since: number;
+}
+
 export interface PlcData {
   timestamp: number;
   values?: Record<string, number>; // 所有訊號（依設備規格），新後端提供
@@ -34,6 +64,9 @@ export interface PlcData {
   motor_enable: number;
   anomaly: AnomalyResult;
   production?: ProductionStatus | null; // PLC 沒有生產變數時為 null
+  trend?: TrendInfo;                     // 趨勢預警（舊後端沒有）
+  mock_drift?: MockDrift | null;         // 內建模擬的漸進劣化（只有 mock 來源）
+  limits_version?: string;               // 門檻版本：變了代表有人改過門檻，前端重新載入規格
   source?: string;
   device_id?: string;
 }

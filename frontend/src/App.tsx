@@ -21,6 +21,7 @@ import LoginDialog from "./components/LoginDialog";
 import OeeCard from "./components/OeeCard";
 import ProductionPanel from "./components/ProductionPanel";
 import OeeSettings from "./components/OeeSettings";
+import TrendLog from "./components/TrendLog";
 import { useOeeCurrent } from "./hooks/useOee";
 
 type Tab = "monitor" | "production" | "manuals" | "settings";
@@ -41,8 +42,12 @@ export default function App() {
 
   const deviceId =
     data?.device_id ?? (data?.source === "mock" ? "S7-1511T-MOCK" : "S7-1511T");
-  const { profile, threshold, fromServer } = useDeviceProfile(deviceId);
+  const { profile, threshold, fromServer, limitsInfo, reload: reloadProfile } = useDeviceProfile(
+    deviceId,
+    data?.limits_version,
+  );
   const alarms = useAlarms(data, profile, threshold);
+  const forecastCount = Object.values(data?.trend?.tags ?? {}).filter((t) => t.state === "forecast").length;
   const liveState = data?.production?.state;
   const oee = useOeeCurrent(deviceId, liveState);
 
@@ -71,6 +76,7 @@ export default function App() {
         isConnected={isConnected}
         lastUpdate={data?.timestamp}
         alarms={alarms}
+        forecastCount={forecastCount}
         theme={theme}
         onToggleTheme={toggle}
         user={auth.user}
@@ -96,13 +102,19 @@ export default function App() {
       <main className="main">
         {tab === "monitor" && (
           <>
-            <div className="columns">
+            <div className="columns monitor-cols">
               <div className="col-wide">
                 <ProcessOverview
                   data={data}
                   profile={profile}
                   history={history}
                   onOpenTrend={setTrendTag}
+                />
+                {/* 事件紀錄放在左欄卡片下方，跟右欄高度接近，不再留下一大片空白 */}
+                <EventLog
+                  deviceId={deviceId}
+                  isAnomaly={Boolean(data?.anomaly?.is_anomaly || data?.anomaly?.rule_alarm)}
+                  profile={profile}
                 />
               </div>
               <div className="col-side">
@@ -117,6 +129,7 @@ export default function App() {
                   alarms={alarms}
                   threshold={threshold}
                   diagnosis={diagnosis}
+                  profile={profile}
                 />
                 <ControlPanel
                   onCommand={sendCommand}
@@ -124,21 +137,19 @@ export default function App() {
                   source={data?.source}
                   canOperate={auth.user !== null}
                   onRequireLogin={auth.openDialog}
+                  profile={profile}
+                  drift={data?.mock_drift ?? null}
                 />
               </div>
             </div>
-            <EventLog
-              deviceId={deviceId}
-              isAnomaly={Boolean(
-                data?.anomaly?.is_anomaly || data?.anomaly?.rule_alarm,
-              )}
-              profile={profile}
-            />
           </>
         )}
 
         {tab === "production" && (
-          <ProductionPanel deviceId={deviceId} current={oee.data} error={oee.error} />
+          <>
+            <ProductionPanel deviceId={deviceId} current={oee.data} error={oee.error} />
+            <TrendLog deviceId={deviceId} profile={profile} />
+          </>
         )}
 
         {tab === "manuals" && <RagPanel />}
@@ -161,6 +172,11 @@ export default function App() {
         history={history}
         profile={profile}
         onClose={() => setTrendTag(null)}
+        deviceId={deviceId}
+        limitsInfo={limitsInfo}
+        canOperate={auth.user !== null}
+        onRequireLogin={auth.openDialog}
+        onLimitsSaved={reloadProfile}
       />
 
       <LoginDialog open={auth.dialogOpen} onLogin={auth.login} onClose={auth.closeDialog} />

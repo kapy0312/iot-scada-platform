@@ -3,46 +3,52 @@
   /* 卡片底色＝外框顏色混入 6% 文字色：暗色模式變亮一點、亮色模式變暗一點，兩種主題都分得出來 */
   --card-bg: color-mix(in srgb, var(--panel) 94%, var(--text) 6%);
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
 }
 .indicators .ind {
+  position: relative;
   display: flex; flex-direction: column; min-width: 0;
   background: var(--card-bg);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 14px 16px 12px;
+  padding: 16px 18px 12px;
 }
 .hmi-card { cursor: pointer; transition: border-color 0.15s; }
 .hmi-card:hover { border-color: var(--muted); }
 
-/* 只有異常時才上色（ISA-101）：偏離＝邊框變亮，警戒／危險＝邊框＋淡淡底色 */
+/* 只有異常時才上色（ISA-101）：偏離＝邊框變亮；預警＝虛線框（還沒到，不填色）；警戒／危險＝實線框＋淡淡底色 */
 .indicators .ind.hmi-st-dev { border-color: var(--muted); }
+.indicators .ind.hmi-st-forecast { border: 2px dashed var(--warn-mark); padding: 15px 17px 11px; }
 .indicators .ind.hmi-st-warning {
-  border-color: var(--warn-mark);
+  border: 2px solid var(--warn-mark); padding: 15px 17px 11px;
   background: color-mix(in srgb, var(--card-bg) 88%, var(--warn-mark) 12%);
 }
 .indicators .ind.hmi-st-danger {
-  border-color: var(--danger-mark);
+  border: 2px solid var(--danger-mark); padding: 15px 17px 11px;
   background: color-mix(in srgb, var(--card-bg) 86%, var(--danger-mark) 14%);
 }
 
-.hmi-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-.hmi-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.hmi-tag { font-size: 12px; color: var(--muted); letter-spacing: 0.02em; }
-.hmi-name { font-size: 15px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hmi-name { font-size: 18px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.hmi-val { display: flex; align-items: baseline; gap: 6px; margin-top: 10px; }
-.hmi-num { font-family: var(--font-mono); font-size: 34px; font-weight: 600; line-height: 1; color: var(--text); }
+.hmi-val { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+.hmi-num { font-family: var(--font-mono); font-size: 44px; font-weight: 600; line-height: 1.05; color: var(--text); }
 .hmi-num.warning { color: var(--warn-mark); }
 .hmi-num.danger  { color: var(--danger-mark); }
-.hmi-u { font-size: 14px; color: var(--muted); }
-.hmi-delta { font-family: var(--font-mono); font-size: 12px; color: var(--muted); margin-top: 6px; }
+.hmi-u { font-size: 17px; color: var(--muted); }
 
-/* 移動式類比指示條 */
-.hmi-bar { position: relative; height: 28px; margin-top: 10px; }
+/* 一句話狀態：正常用一般字色，偏離粗體，預警／警戒用警戒色，危險用危險色 */
+.hmi-status { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; font-size: 16px; line-height: 1.4; color: var(--muted); min-height: 2.8em; }
+.hmi-status.dev { color: var(--text); font-weight: 500; }
+.hmi-status.warning { color: var(--warn-text); font-weight: 500; }
+.hmi-status.danger { color: var(--danger-text); font-weight: 500; }
+.hmi-status svg { flex: none; margin-top: 3px; }
+.hmi-delta { font-size: 14px; color: var(--muted); margin-top: -2px; min-height: 1.5em; }
+
+/* 移動式類比指示條（刻度數字拿掉，正常／警戒／危險區段看顏色；數字在滑鼠提示與趨勢視窗） */
+.hmi-bar { position: relative; height: 26px; margin-top: 8px; }
 .hmi-track {
-  position: absolute; left: 0; right: 0; top: 10px; height: 14px;
+  position: absolute; left: 0; right: 0; top: 10px; height: 12px;
   border: 1px solid var(--line); border-radius: 3px; overflow: hidden;
   background: var(--panel);
 }
@@ -54,34 +60,26 @@
 .hmi-zone.danger.on { background: color-mix(in srgb, var(--danger-mark) 60%, transparent); }
 
 /* 目前值：上方三角形＋貫穿指示條的細線 */
-.hmi-ptr { position: absolute; top: 0; width: 0; height: 26px; --ptr: var(--text); }
+.hmi-ptr { position: absolute; top: 0; width: 0; height: 24px; --ptr: var(--text); }
 .hmi-ptr::before {
   content: ""; position: absolute; top: 0; left: 0; transform: translateX(-50%);
   border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid var(--ptr);
 }
 .hmi-ptr::after {
-  content: ""; position: absolute; top: 8px; left: -1px; width: 2px; height: 18px; background: var(--ptr);
+  content: ""; position: absolute; top: 8px; left: -1px; width: 2px; height: 16px; background: var(--ptr);
 }
 .hmi-ptr.warning { --ptr: var(--warn-mark); }
 .hmi-ptr.danger  { --ptr: var(--danger-mark); }
 
-.hmi-scale { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 11px; color: var(--muted); margin-top: 2px; }
-.hmi-limits { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--muted); margin-top: 8px; }
-.hmi-limits .mono { color: var(--text); }
-.hmi-limits .w, .hmi-limits .w .mono { color: var(--warn-mark); }
-.hmi-limits .d, .hmi-limits .d .mono { color: var(--danger-mark); }
+.hmi-scale { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 13px; color: var(--muted); margin-top: 2px; }
 
-/* 迷你走勢：內嵌小框，標題列放「最近 5 分鐘」與趨勢按鈕 */
-.hmi-spark-box {
-  margin-top: 12px; padding: 8px 10px 6px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
-}
-.hmi-spark-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.hmi-spark-cap { font-size: 11px; color: var(--muted); }
-.hmi-spark { display: block; width: 100%; height: 44px; margin-top: 4px; }
+/* 迷你走勢：直接放在卡片底部，不再另外框起來 */
+.hmi-spark { display: block; width: 100%; height: 48px; margin-top: 10px; }
+.hmi-more { align-self: flex-end; margin-top: 4px; font-size: 14px; color: var(--muted); }
+.hmi-card:hover .hmi-more { color: var(--text); }
 .hmi-link {
   min-height: 28px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--line);
-  background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+  background: transparent; color: var(--text); font: inherit; font-size: 14px; cursor: pointer;
 }
 .hmi-link:hover { border-color: var(--muted); }
 
@@ -113,9 +111,14 @@
   .hmi-trow { grid-template-columns: 1fr; }
 }
 
-/* ===== 監控頁兩欄等高：右欄的告警面板伸長補滿，控制面板貼齊底部 ===== */
-.columns { align-items: stretch; }
-.columns > .col-wide,
-.columns > .col-side { display: flex; flex-direction: column; }
-.columns > .col-wide > .panel { flex: 1 1 auto; }
-.columns > .col-side > .panel:first-child { flex: 1 1 auto; }
+/* ===== 監控頁：左欄（製程與卡片＋事件紀錄）、右欄（OEE、告警預警、控制）各自往下排，不再互相撐高 ===== */
+.columns.monitor-cols { align-items: flex-start; }
+/* ===== 趨勢視窗：門檻設定 ===== */
+.limits { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.limits-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.limits-table { border-collapse: collapse; font-size: 16px; }
+.limits-table th { text-align: left; font-weight: 400; color: var(--muted); padding: 4px 24px 4px 0; }
+.limits-table td { padding: 4px 18px 4px 0; }
+.limits-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.limits-field { display: flex; flex-direction: column; gap: 4px; }
+.limits-field .input { width: 100%; }

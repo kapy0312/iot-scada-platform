@@ -90,10 +90,38 @@ function normalize(profile: DeviceProfile): DeviceProfile {
   return { name: profile.name, tags };
 }
 
-export function useDeviceProfile(deviceId: string) {
+/** 可以在畫面上改的門檻（名稱、單位等結構不在這裡） */
+export interface Limits {
+  normal: [number, number];
+  warning: number;
+  danger: number;
+  scale: [number, number];
+}
+
+/** 每個訊號的預設值與最後修改紀錄（後端 migration 008） */
+export interface LimitsInfo {
+  default: Limits | null;
+  modified: { updated_by: string | null; updated_at: string | null } | null;
+}
+
+export function limitsOf(spec: TagSpec): Limits {
+  return { normal: [spec.normal[0], spec.normal[1]], warning: spec.warning, danger: spec.danger, scale: [spec.scale[0], spec.scale[1]] };
+}
+
+/**
+ * 設備規格；liveVersion 是 WebSocket 帶來的門檻版本，跟目前載入的不同時自動重新載入
+ * （別的網頁改了門檻，這邊也會跟上）
+ */
+export function useDeviceProfile(deviceId: string, liveVersion?: string) {
   const [profile, setProfile] = useState<DeviceProfile>(DEFAULT_PROFILE);
   const [threshold, setThreshold] = useState<number>(DEFAULT_THRESHOLD);
   const [fromServer, setFromServer] = useState(false);
+  const [limitsInfo, setLimitsInfo] = useState<Record<TagKey, LimitsInfo>>({});
+  const [loadedVersion, setLoadedVersion] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // 版本不同就觸發重新載入（只在「已經載入過、而且版本真的變了」時）
+  const stale = Boolean(liveVersion && loadedVersion && liveVersion !== loadedVersion);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,6 +131,8 @@ export function useDeviceProfile(deviceId: string) {
         if (cancelled || !data?.profile?.tags) return;
         setProfile(normalize(data.profile as DeviceProfile));
         if (typeof data.anomaly_threshold === "number") setThreshold(data.anomaly_threshold);
+        setLimitsInfo(data.limits ?? {});
+        setLoadedVersion(typeof data.limits_version === "string" ? data.limits_version : "");
         setFromServer(true);
       })
       .catch(() => {
@@ -111,7 +141,7 @@ export function useDeviceProfile(deviceId: string) {
     return () => {
       cancelled = true;
     };
-  }, [deviceId]);
+  }, [deviceId, reloadKey, stale]);
 
-  return { profile, threshold, fromServer };
+  return { profile, threshold, fromServer, limitsInfo, reload: () => setReloadKey((k) => k + 1) };
 }

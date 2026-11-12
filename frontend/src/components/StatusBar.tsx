@@ -9,6 +9,7 @@ interface Props {
   isConnected: boolean;
   lastUpdate?: number;
   alarms: Alarm[];
+  forecastCount?: number;       // 預警中的訊號數
   theme: Theme;
   onToggleTheme: () => void;
   user: AuthUser | null;
@@ -16,7 +17,7 @@ interface Props {
   onLogout: () => void;
 }
 
-export default function StatusBar({ deviceName, source, isConnected, lastUpdate, alarms, theme, onToggleTheme, user, onLogin, onLogout }: Props) {
+export default function StatusBar({ deviceName, source, isConnected, lastUpdate, alarms, forecastCount = 0, theme, onToggleTheme, user, onLogin, onLogout }: Props) {
   const top = alarms[0]?.level;
   const chipClass = top === "danger" ? "chip danger" : top === "warning" ? "chip warning" : "chip";
   const time = lastUpdate
@@ -26,7 +27,7 @@ export default function StatusBar({ deviceName, source, isConnected, lastUpdate,
   return (
     <header className="statusbar">
       <div className="title">
-        <span className="small muted">IIoT SCADA Platform · 單元畫面</span>
+        <span className="small muted">IIoT SCADA Platform</span>
         <strong>{deviceName}</strong>
       </div>
       <div className="meta">
@@ -40,6 +41,11 @@ export default function StatusBar({ deviceName, source, isConnected, lastUpdate,
         <span className="mono">{time}</span>
       </div>
       <div className="spacer" />
+      {forecastCount > 0 && (
+        <div className="chip forecast" role="status" title="有訊號在持續上升，預估 60 分鐘內會到警戒值">
+          <span aria-hidden="true">↗</span> 預警 {forecastCount}
+        </div>
+      )}
       <div className={chipClass} role="status" aria-live="polite">
         {top === "danger" && <DangerIcon size={16} />}
         {top === "warning" && <WarningIcon size={16} />}

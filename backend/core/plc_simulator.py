@@ -9,6 +9,7 @@ from core.device_profile import evaluate, get_production, get_profile, get_tags
 from core.incidents import INCIDENT_GAP_SECONDS, absorb, new_incident, severity_and_level
 from core.production import RUN, STATE_TEXT, CounterTracker, RunGate, is_running
 from core.trend import TrendTracker
+from core import limits
 from core.ws_manager import manager
 from db.writer import write_to_db
 from db.anomaly_writer import record_anomaly, save_incident
@@ -58,6 +59,8 @@ _anomaly_deadline: float = 0.0
 MOCK_CYCLE_SECONDS = 6.0
 MOCK_NG_RATE = {False: 0.01, True: 0.10}
 _mock_prod = {"acc": 0.0, "good": 0, "ng": 0}
+# 內建模擬的漸進劣化：某個訊號的中心值每分鐘慢慢往上加（驗證趨勢預警用，跟 PLCSIM 的 drift 指令對應）
+_mock_drift = {"tag": None, "rate": 0.0, "offset": 0.0, "since": None}
 
 
 def get_active_device_id() -> str:
@@ -73,6 +76,28 @@ def trigger_mock_anomaly(duration_seconds: float = 20.0):
     _anomaly_override = True
     _anomaly_deadline = time.time() + duration_seconds
     print(f"[PLC] 模擬異常已觸發，持續 {duration_seconds} 秒")
+
+
+def set_mock_drift(tag: str | None, rate_per_min: float = 0.0) -> dict:
+    """內建模擬的漸進劣化；tag=None 或 rate=0 代表關閉（中心值馬上回到原位，數值約 1 分鐘內回正常）"""
+    if current_source != "mock":
+        raise ValueError("僅 mock 資料源可模擬劣化；PLCSIM 請用 tools/plcsim_ctl.py drift")
+    if tag is None or rate_per_min == 0:
+        _mock_drift.update(tag=None, rate=0.0, offset=0.0, since=None)
+        print("[PLC] 模擬劣化關閉")
+    else:
+        if tag not in MOCK_SIGNALS or tag not in get_tags(get_active_device_id()):
+            raise ValueError(f"內建模擬沒有這個訊號：{tag}")
+        _mock_drift.update(tag=tag, rate=float(rate_per_min), offset=0.0, since=time.time())
+        print(f"[PLC] 模擬劣化：{tag} 每分鐘 +{rate_per_min:g}")
+    return mock_drift_state()
+
+
+def mock_drift_state() -> dict | None:
+    if _mock_drift["tag"] is None:
+        return None
+    return {"tag": _mock_drift["tag"], "rate_per_min": _mock_drift["rate"],
+            "offset": round(_mock_drift["offset"], 4), "since": _mock_drift["since"]}
 
 
 def start_polling():
@@ -108,6 +133,7 @@ async def switch_source(new_source: str):
     run_gate.reset()
     _handle_trend_events(trend.reset(time.time()))
     _anomaly_override = False
+    _mock_drift.update(tag=None, rate=0.0, offset=0.0, since=None)
     print(f"[PLC] 資料源切換為：{current_source}，ML 滑動視窗已清空")
     _polling_task = asyncio.create_task(_run_source_loop())
 
@@ -177,13 +203,17 @@ async def _mock_poll_loop():
         if _anomaly_override and not anomalous:
             _anomaly_override = False
             print("[PLC] 模擬異常結束，回復正常波動")
+        if _mock_drift["tag"]:
+            _mock_drift["offset"] += _mock_drift["rate"] / 60
         for t in tags:
             sig = MOCK_SIGNALS[t]
+            center = sig["base"] + (_mock_drift["offset"] if t == _mock_drift["tag"] else 0.0)
             if anomalous:
                 # 朝異常目標值靠攏（每秒推進 40%），而非瞬間跳變，較貼近真實故障發展過程
                 values[t] += (sig["anomaly"] - values[t]) * 0.4 + random.gauss(0, sig["noise"] * 0.6)
             else:
-                values[t] += random.gauss(0, sig["noise"]) + 0.02 * (sig["base"] - values[t])
+                # 往中心值拉回（劣化時中心值每秒往上移，數值跟著慢慢爬）
+                values[t] += random.gauss(0, sig["noise"]) + 0.02 * (center - values[t])
             values[t] = max(0.0, values[t])
         await _process_reading({t: round(v, 3) for t, v in values.items()}, 1, _mock_production(values, anomalous))
         await asyncio.sleep(1)
@@ -278,6 +308,8 @@ async def _process_reading(values: dict, motor_enable: int = 1, production: dict
         "motor_enable": motor_enable,
         "anomaly": anomaly,
         "trend": trend_snap,
+        "limits_version": limits.version,   # 門檻改過時前端會重新載入規格
+        "mock_drift": mock_drift_state() if current_source == "mock" else None,
         "production": {
             "state": machine_state,
             "state_text": STATE_TEXT.get(machine_state) if machine_state is not None else None,

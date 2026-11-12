@@ -14,14 +14,14 @@ from fastapi.testclient import TestClient
 
 from core import auth
 from routers import auth as auth_router
-from routers import control, rag, system
+from routers import control, device, rag, system
 
 HEADER = {auth.CSRF_HEADER: "1"}
 
 
 def make_app() -> FastAPI:
     app = FastAPI()
-    for r in (auth_router.router, control.router, system.router, rag.router):
+    for r in (auth_router.router, control.router, system.router, rag.router, device.router):
         app.include_router(r)
     return app
 
@@ -57,6 +57,10 @@ def test_登入失敗5次鎖定_時間過後解鎖():
     ("post", "/api/control/write", {"tag": "motor_enable", "value": 1}),
     ("post", "/api/system/data-source", {"source": "mock"}),
     ("post", "/api/system/simulate-anomaly", {"duration_seconds": 5}),
+    ("post", "/api/system/simulate-drift", {"tag": "temperature", "rate_per_min": 1}),
+    ("put", "/api/device-profile/S7-1511T/limits/temperature",
+     {"normal": [60, 72], "warning": 80, "danger": 95, "scale": [30, 110]}),
+    ("delete", "/api/device-profile/S7-1511T/limits/temperature", None),
     ("post", "/api/system/reload-model", None),
     ("delete", "/api/rag/documents/abc", None),
     ("patch", "/api/rag/documents/abc", {"enabled": False}),

@@ -1,4 +1,4 @@
-import type { PlcData } from "../hooks/useWebSocket";
+import type { PlcData, TagTrend } from "../hooks/useWebSocket";
 import { getValue, type Level, type TagKey, type TagSpec } from "../deviceProfile";
 
 export const pct = (min: number, max: number, v: number) =>
@@ -56,4 +56,29 @@ export function autoRange(spec: TagSpec, values: number[]) {
     lo = Math.max(scaleMin, lo - pad);
     hi = Math.min(scaleMax, hi + pad);
     return { lo, hi };
+}
+/** 預估時間的口語說法：「約 8 分鐘」「1 分鐘內」「約 1 小時 5 分」 */
+export function etaText(seconds: number | null | undefined): string {
+    if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "—";
+    if (seconds < 60) return "1 分鐘內";
+    const m = Math.round(seconds / 60);
+    if (m < 60) return `約 ${m} 分鐘`;
+    return `約 ${Math.floor(m / 60)} 小時 ${m % 60} 分`;
+}
+
+/** 持續時間：「5 分 29 秒」「45 秒」 */
+export function durText(seconds: number | null | undefined): string {
+    if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "—";
+    const s = Math.max(0, Math.round(seconds));
+    if (s < 60) return `${s} 秒`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m} 分 ${s % 60} 秒`;
+    return `${Math.floor(m / 60)} 時 ${m % 60} 分`;
+}
+
+export const LINE_TEXT = { warning: "警戒", danger: "危險" } as const;
+
+/** 這個訊號目前是否在預警中（預估會在 60 分鐘內到警戒或危險值） */
+export function isForecast(t: TagTrend | undefined): t is TagTrend & { target: "warning" | "danger" } {
+    return t?.state === "forecast" && (t.target === "warning" || t.target === "danger");
 }

@@ -12,9 +12,13 @@
 - 斜率要明顯：斜率 × 視窗長度 ≥ 3 倍雜訊（雜訊用殘差的 MAD 估計）
 - 斜率要兩段都往上：整段 10 分鐘看「是不是真的在升」，最近 3 分鐘決定「現在升多快」
   （劣化常常是平了一陣子才開始爬，整段斜率會被前面平的那段拉低，預估時間會多估一倍）
+- 上升要夠大、夠穩（防「慢慢飄」：環境溫度變化這類幾分鐘尺度的起伏，10 秒雜訊看不出來）：
+  視窗內的漲幅至少要有正常範圍寬度的一半；把資料切成每分鐘平均，大多數要比前面的高（Kendall τ ≥ 0.6）
 - 趨緩檢查：最近 3 分鐘的斜率比前一段小很多時，當成一階延遲（像熱車：越接近終點爬越慢），
   推估最後會停在哪；停的位置到不了警戒值就不預警，到得了就用指數曲線算時間
 - 延遲生效：連續 3 次（30 秒）成立才亮，連續 6 次（60 秒）不成立才熄
+- 到了就不重複：某條線「到了」之後，要等數值回到正常範圍，才會再預警同一條線
+  （數值在警戒值附近上下晃時，不會一直冒出「預估 0 分鐘後到警戒」；那段時間由規格告警負責）
 
 停機、換模、恢復期（RunGate 不是 active）時不收資料、視窗清空，進行中的預警記為 interrupted。
 
@@ -35,7 +39,10 @@ RECENT_MINUTES = 3.0
 ON_COUNT = int(os.getenv("TREND_ON_COUNT", "3"))
 OFF_COUNT = int(os.getenv("TREND_OFF_COUNT", "6"))
 DECEL_RATIO = 0.8             # 後段斜率 < 前段 × 0.8 才算在趨緩（雜訊造成的小差異不算）
-SIGNIFICANCE_K = 3.0          # 斜率 × 視窗長度至少是雜訊的幾倍
+SIGNIFICANCE_K = 3.0
+MIN_RISE_OF_BAND = 0.5        # 視窗內漲幅至少是正常範圍寬度的幾倍
+MIN_KENDALL = 0.6             # 每分鐘平均的「往上走」一致程度（1＝每一分鐘都比前面高，0＝沒方向）
+BLOCK_POINTS = 6              # 6 筆 10 秒平均＝1 分鐘          # 斜率 × 視窗長度至少是雜訊的幾倍
 MIN_SAMPLES_PER_BUCKET = 5    # 10 秒內至少要有 5 筆讀值，這 10 秒才算數
 LEVELS = ("warning", "danger")
 
@@ -55,6 +62,21 @@ def theil_sen(t: np.ndarray, v: np.ndarray) -> float:
     if not ok.any():
         return 0.0
     return float(np.median((v[j] - v[i])[ok] / dt[ok]))
+
+
+def kendall_tau(v: np.ndarray) -> float:
+    """每兩個點比一次大小：後面比較大記 +1、比較小記 −1，平均起來（1＝一路往上）"""
+    n = len(v)
+    if n < 2:
+        return 0.0
+    i, j = np.triu_indices(n, k=1)
+    return float(np.sign(v[j] - v[i]).sum() / len(i))
+
+
+def minute_means(v: np.ndarray, size: int = BLOCK_POINTS) -> np.ndarray:
+    """從最新的往回切成每分鐘一組取平均（最舊那組不滿 1 分鐘就丟掉）"""
+    n = len(v) // size
+    return v[len(v) - n * size:].reshape(n, size).mean(axis=1) if n else v[:0]
 
 
 def plateau(t: np.ndarray, v: np.ndarray, seg: int) -> tuple[float, float] | None:
@@ -93,7 +115,10 @@ def analyze(points: list[tuple[float, float]], now: float, spec: dict,
     resid = v - (intercept + slope_full * t)
     noise = 1.4826 * float(np.median(np.abs(resid - np.median(resid))))
     span = float(t[-1] - t[0])
-    significant = slope_full > 0 and slope_recent > 0 and slope_full * span >= k * noise
+    band = float(spec["normal"][1]) - float(spec["normal"][0])
+    significant = (slope_full > 0 and slope_recent > 0 and slope_full * span >= k * noise
+                   and slope_full * span >= MIN_RISE_OF_BAND * band
+                   and kendall_tau(minute_means(v)) >= MIN_KENDALL)
     slope = slope_recent      # 有在趨緩時，下面的 plateau 會改用指數曲線算
 
     last = v[-3:]
@@ -140,6 +165,7 @@ class _TagState:
     on_streak: int = 0
     off_streak: int = 0
     episode: dict | None = None     # 進行中的預警
+    reached: set = field(default_factory=set)   # 已經到過的線（回到正常範圍才清掉）
     last: dict = field(default_factory=dict)
 
 
@@ -225,6 +251,18 @@ class TrendTracker:
         r = analyze(list(st.points), now, spec, self.min_points, self.recent_points, self.horizon_s)
         events = []
         ep = st.episode
+        if r.get("current") is not None and r["current"] <= float(spec["normal"][1]):
+            st.reached.clear()
+        if r["candidate"] and r.get("target") in st.reached:
+            r["candidate"] = False
+            r["state"] = STABLE
+
+        # 預警中，這條線的數值被改了（畫面上改門檻）：結束為 interrupted，用新的線重新判斷
+        if ep and r.get("target") == ep["target_level"] and r.get("threshold") != ep["threshold"]:
+            events.append(self._end(tag, st, "interrupted", now))
+            ep = None
+            st.on_streak = 0
+            st.reached.clear()
 
         # 預警中，這條線已經到了：結束為 reached（現有規格告警會接手）
         if ep and (r["state"] == ABOVE or (r.get("target") and r["target"] != ep["target_level"])):
@@ -275,6 +313,7 @@ class TrendTracker:
         ep["outcome"] = outcome
         if outcome == "reached":
             ep["reached_at"] = ep["ended_at"]
+            st.reached.add(ep["target_level"])
         return {"type": "end", "episode": dict(ep)}
 
     # ---------- 給畫面 ----------

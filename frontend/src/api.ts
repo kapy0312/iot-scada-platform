@@ -1,3 +1,4 @@
+import type { Limits } from "./deviceProfile";
 import { API_BASE } from "./config";
 
 export type Source = "mock" | "opcua";
@@ -93,6 +94,17 @@ export async function triggerMockAnomaly(durationSeconds = 40): Promise<void> {
   }));
   const data = await res.json();
   if (data.status !== "ok") throw new Error(data.message ?? "觸發失敗");
+}
+
+/** 內建模擬的漸進劣化（驗證趨勢預警用）；tag 為 null 代表關閉 */
+export async function simulateDrift(tag: string | null, ratePerMin = 0): Promise<void> {
+  const res = await ensureOk(await apiFetch("/api/system/simulate-drift", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tag, rate_per_min: ratePerMin }),
+  }));
+  const data = await res.json();
+  if (data.status !== "ok") throw new Error(data.message ?? "設定失敗");
 }
 
 export async function writeTag(tag: string, value: number): Promise<{ ok: boolean; message: string }> {
@@ -201,6 +213,7 @@ export interface Incident {
   min_score: number | null;
   ai_analysis: string | null;
   ai_source: ManualSource | null;
+  pre_warnings?: TrendWarning[];      // 這次事件之前的趨勢預警（沒有 migration 007 時是空的）
 }
 
 export async function getIncidents(deviceId: string, hours: number): Promise<Incident[]> {
@@ -210,6 +223,67 @@ export async function getIncidents(deviceId: string, hours: number): Promise<Inc
   if (!res.ok) throw new Error(String(res.status));
   const data = await res.json();
   return (data.incidents ?? []) as Incident[];
+}
+
+// ---------- 門檻設定 ----------
+
+/** 修改一個訊號的門檻（需登入）；不合法時丟出後端的說明，例如「危險值要大於警戒值」 */
+export async function updateLimits(deviceId: string, tag: string, limits: Limits): Promise<void> {
+  await ensureOk(await apiFetch(
+    `/api/device-profile/${encodeURIComponent(deviceId)}/limits/${encodeURIComponent(tag)}`,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(limits) },
+  ));
+}
+
+/** 恢復程式預設值（需登入） */
+export async function resetLimits(deviceId: string, tag: string): Promise<void> {
+  await ensureOk(await apiFetch(
+    `/api/device-profile/${encodeURIComponent(deviceId)}/limits/${encodeURIComponent(tag)}`,
+    { method: "DELETE" },
+  ));
+}
+
+// ---------- 趨勢預警 ----------
+
+/** 一次預警（trend_warnings 一列） */
+export interface TrendWarning {
+  id: number;
+  device_id: string;
+  tag_name: string;
+  target_level: "warning" | "danger";
+  threshold: number;
+  started_at: string;
+  ended_at: string;
+  first_eta_s: number;
+  min_eta_s: number;
+  slope_per_min: number;
+  value_at_start: number;
+  value_at_end: number;
+  outcome: "ongoing" | "reached" | "cleared" | "interrupted";
+  reached_at: string | null;
+  lead_s: number | null;              // 提前量：到了的時間 − 預警開始
+  incident_id: number | null;
+}
+
+export interface TrendSummary {
+  count: Record<TrendWarning["outcome"], number>;
+  hit_rate: number | null;            // 真的到了 ÷（到了＋自己退了）
+  avg_lead_s: number | null;
+  avg_eta_error_s: number | null;     // 正數＝實際比預估晚到
+}
+
+export interface TrendWarningsResult {
+  available: boolean;                 // false＝還沒執行 migration 007
+  message?: string;
+  summary: TrendSummary;
+  warnings: TrendWarning[];
+}
+
+export async function getTrendWarnings(deviceId: string, hours: number): Promise<TrendWarningsResult> {
+  const res = await ensureOk(await apiFetch(
+    `/api/trend/warnings?device_id=${encodeURIComponent(deviceId)}&hours=${hours}`
+  ));
+  return res.json();
 }
 
 // ---------- OEE ----------

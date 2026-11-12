@@ -218,3 +218,47 @@ def test_平了一陣子才開始升_預估不會多估():
     ep = starts(events)[0]
     actual = 1080 - ep["started_at"]
     assert abs(ep["first_eta_s"] - actual) <= 0.15 * actual
+
+
+def test_慢慢飄的雜訊不誤報():
+    # 溫度跟著環境慢慢飄（時間常數約 50 秒、幅度約 ±1 °C，像 mock 的雜訊），2 小時內不該預警
+    for seed in range(3):
+        rng = random.Random(seed)
+        wander = {"v": 0.0}
+
+        def temp(t):
+            wander["v"] += rng.gauss(0, 0.2) - 0.02 * wander["v"]
+            return 70 + wander["v"]
+        assert starts(run(TrendTracker(), 7200, temp, seed=seed)) == [], seed
+
+
+def test_內建模擬劣化(monkeypatch):
+    monkeypatch.setattr(ps, "current_source", "mock")
+    st = ps.set_mock_drift("temperature", 1.5)
+    assert st["tag"] == "temperature" and st["rate_per_min"] == 1.5
+    try:
+        import pytest
+        with pytest.raises(ValueError):
+            ps.set_mock_drift("no_such_tag", 1.0)
+        assert ps.set_mock_drift(None) is None and ps.mock_drift_state() is None
+        monkeypatch.setattr(ps, "current_source", "opcua")
+        with pytest.raises(ValueError):
+            ps.set_mock_drift("temperature", 1.0)
+    finally:
+        ps._mock_drift.update(tag=None, rate=0.0, offset=0.0, since=None)
+
+
+def test_到了之後在警戒值附近晃不會重複預警():
+    # 升到 86 之後在 84～86 之間晃 10 分鐘：警戒值只預警一次；之後回到正常再升，會重新預警
+    def temp(t):
+        if t < 960:
+            return 70 + t / 60
+        if t < 1560:
+            return 85 + 1.2 * math.sin(t / 40)
+        if t < 1800:
+            return 72
+        return 72 + (t - 1800) / 60
+    events = run(TrendTracker(), 3000, temp)
+    warns = [e for e in starts(events) if e["target_level"] == "warning"]
+    assert len(warns) == 2, [(e["started_at"], e["first_eta_s"]) for e in warns]
+    assert warns[1]["started_at"] > 1800

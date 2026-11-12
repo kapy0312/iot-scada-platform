@@ -16,9 +16,11 @@ import {
   getValue,
   tagKeys,
   type DeviceProfile,
+  type LimitsInfo,
   type TagKey,
   type TagSpec,
 } from "../deviceProfile";
+import LimitsEditor from "./LimitsEditor";
 import { autoRange, fixedWindow, levelKind, numbersOf } from "./hmi";
 import "./hmi.css";
 
@@ -28,6 +30,12 @@ interface Props {
   history: PlcData[];
   profile: DeviceProfile;
   onClose: () => void;
+  /** 門檻設定（沒傳就不顯示編輯區） */
+  deviceId?: string;
+  limitsInfo?: Record<TagKey, LimitsInfo>;
+  canOperate?: boolean;
+  onRequireLogin?: () => void;
+  onLimitsSaved?: () => void;
 }
 
 type Scale = "fixed" | "auto";
@@ -262,7 +270,9 @@ function TagChart({
   );
 }
 
-export default function TrendDialog({ tag, history, profile, onClose }: Props) {
+export default function TrendDialog({
+  tag, history, profile, onClose, deviceId, limitsInfo, canOperate = false, onRequireLogin, onLimitsSaved,
+}: Props) {
   const ref = useRef<HTMLDialogElement>(null);
   const [minutes, setMinutes] = useState(5);
   const [scale, setScale] = useState<Scale>("fixed");
@@ -428,6 +438,19 @@ export default function TrendDialog({ tag, history, profile, onClose }: Props) {
                 斜紋條＝ML 判定異常
               </p>
             </>
+          )}
+          {deviceId && onRequireLogin && onLimitsSaved && (
+            <LimitsEditor
+              key={`${tag}-${spec.warning}-${spec.danger}-${spec.normal.join()}-${spec.scale.join()}`}
+              deviceId={deviceId}
+              tag={tag}
+              spec={spec}
+              info={limitsInfo?.[tag]}
+              current={history.length ? getValue(history[history.length - 1], tag) : null}
+              canOperate={canOperate}
+              onRequireLogin={onRequireLogin}
+              onSaved={onLimitsSaved}
+            />
           )}
         </div>
       )}

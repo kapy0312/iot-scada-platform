@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import core.plc_simulator as plc
 from core.auth import client_ip, require_operator
 from db.audit import write_audit
@@ -14,6 +14,11 @@ class DataSourceCommand(BaseModel):
 
 class AnomalySimRequest(BaseModel):
     duration_seconds: float = 20.0
+
+
+class DriftSimRequest(BaseModel):
+    tag: str | None = None               # None＝關閉
+    rate_per_min: float = Field(default=0.0, ge=0, le=1000)   # 每分鐘增加多少（單位跟該訊號相同）
 
 
 @router.get("/api/system/data-source")
@@ -47,6 +52,21 @@ async def simulate_anomaly(cmd: AnomalySimRequest, request: Request, user: dict 
     await write_audit("system.simulate_anomaly", "ok", username=user["username"],
                       client_ip=client_ip(request), params=params)
     return {"status": "ok", "duration_seconds": cmd.duration_seconds}
+
+
+@router.post("/api/system/simulate-drift")
+async def simulate_drift(cmd: DriftSimRequest, request: Request, user: dict = Depends(require_operator)):
+    """內建模擬的漸進劣化（驗證趨勢預警用）；tag 留空或 rate_per_min=0 代表關閉"""
+    params = {"tag": cmd.tag, "rate_per_min": cmd.rate_per_min}
+    try:
+        state = plc.set_mock_drift(cmd.tag, cmd.rate_per_min)
+    except ValueError as e:
+        await write_audit("system.simulate_drift", "error", username=user["username"],
+                          client_ip=client_ip(request), params=params, message=str(e))
+        return {"status": "error", "message": str(e)}
+    await write_audit("system.simulate_drift", "ok", username=user["username"],
+                      client_ip=client_ip(request), params=params)
+    return {"status": "ok", "drift": state}
 
 
 @router.get("/api/system/model-info")

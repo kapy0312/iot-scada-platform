@@ -24,6 +24,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from core.config import get_database_url
+from core import limits
 from core.device_profile import ANOMALY_THRESHOLD, DEVICE_PROFILES, LEVEL_TEXT, base_device_id, evaluate, get_profile
 from core.incidents import DIAGNOSIS_TYPES, diagnosis_type
 from rag.embedder import embed_text
@@ -83,12 +84,15 @@ def _time_range(start: str | None, end: str | None, default_hours: int) -> tuple
 
 async def _connect_db():
     try:
-        return await asyncpg.connect(get_database_url(), timeout=5)
+        conn = await asyncpg.connect(get_database_url(), timeout=5)
     except Exception as e:
         raise ToolError(
             f"無法連線 TimescaleDB（{type(e).__name__}）。請確認 timescaledb 容器已啟動："
             "docker start timescaledb"
         ) from e
+    # 畫面上改過的門檻存在資料庫：每次查詢前重新載入，回答時用的正常範圍、警戒值才會跟網頁一致
+    await limits.load(conn)
+    return conn
 
 
 async def _qdrant_call(coro):
@@ -316,9 +320,8 @@ async def get_device_info(device_id: str = "S7-1511T") -> dict:
     資料庫內有哪些 device_id 與最新資料時間，以及已上傳的手冊清單。
     不確定要查哪個 device_id 時，先呼叫這個工具。
     """
-    profile = get_profile(device_id)
-
     conn = await _connect_db()
+    profile = get_profile(device_id)
     try:
         rows = await conn.fetch("""
             SELECT device_id, MIN(time) AS first_seen, MAX(time) AS last_seen
