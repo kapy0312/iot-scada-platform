@@ -13,7 +13,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mcp_server import LOCAL_TZ, get_device_info, get_trend, list_anomalies, search_manual  # noqa: E402
+from mcp_server import (  # noqa: E402
+    LOCAL_TZ, get_device_info, get_oee, get_trend, list_anomalies, list_trend_warnings, search_manual,
+)
 
 
 def show(title: str, data) -> None:
@@ -40,6 +42,13 @@ async def main():
         print("\n（這段時間沒有異常事件，略過 get_trend；可先在前端按「模擬異常」再測）")
 
     show("search_manual", await search_manual("溫度持續上升 壓力偏高 可能原因與處置", device_id, top_k=3))
+
+    for title, call in (("get_oee（今天）", get_oee(device_id)),
+                        (f"list_trend_warnings（最近 {hours} 小時）", list_trend_warnings(device_id, hours))):
+        try:
+            show(title, await call)
+        except Exception as e:      # 例如 OEE 的表還沒建：印出原因，不中斷其他測試
+            print(f"\n===== {title} =====\n{type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":

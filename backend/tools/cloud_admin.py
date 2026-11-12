@@ -126,6 +126,13 @@ async def cmd_check() -> int:
                 print(f"✅ 可以讀取：trend_warnings {await conn.fetchval('SELECT count(*) FROM trend_warnings')} 筆")
             else:
                 print("（雲端還沒有 trend_warnings：執行 db/cloud/004_trend.sql 後才會同步趨勢預警紀錄）")
+            if await conn.fetchval("SELECT to_regclass('tag_limits') IS NOT NULL"):
+                n = await conn.fetchrow("""SELECT (SELECT count(*) FROM tag_limits) AS l,
+                                                  (SELECT count(*) FROM product_specs) AS p,
+                                                  (SELECT count(*) FROM shift_definitions) AS s""")
+                print(f"✅ 可以讀取：tag_limits {n['l']} 列、product_specs {n['p']} 列、shift_definitions {n['s']} 列")
+            else:
+                print("（雲端還沒有設定表：執行 db/cloud/006_settings.sql 後才會同步門檻、品號、班別）")
             has_manual = await conn.fetchval("SELECT to_regclass('manual_documents') IS NOT NULL")
             if has_manual:
                 docs = await conn.fetchval("SELECT count(*) FROM manual_documents WHERE deleted_at IS NULL")

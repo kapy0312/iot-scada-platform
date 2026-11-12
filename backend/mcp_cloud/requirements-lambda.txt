@@ -1,0 +1,7 @@
+# 雲端 MCP（Lambda 容器）只裝需要的套件；版本跟 backend/requirements.txt、requirements-mcp.txt 一致
+mcp==2.3.0
+asyncpg==0.31.0
+httpx==0.28.1
+uvicorn==0.48.0
+python-dotenv==1.2.2
+boto3

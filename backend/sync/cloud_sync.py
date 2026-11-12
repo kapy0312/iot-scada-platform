@@ -26,6 +26,10 @@
 - 本地刪掉的手冊，雲端標 deleted_at（edge_writer 不能刪文件）；同一份 PDF 重新上傳會清掉 deleted_at
 - 唯一的刪除：同一份 PDF 重新切塊時，清掉雲端不在本地的舊段落（edge_writer 只有 manual_chunks 有 DELETE）
 
+設定表（本地 006、008，雲端 006；給雲端 MCP 算 OEE、看目前門檻）：
+- tag_limits、product_specs、shift_definitions 每輪整張比對：本地有、雲端沒有或不同就寫入，本地刪掉的雲端也刪
+- 本地缺哪張表（例如沒跑 008）就略過那張
+
 設定（.env）：
 - CLOUD_SYNC_ENABLED=true 才會啟動
 - TIGER_EDGE_URL：edge_writer 帳號的連線字串
@@ -48,7 +52,8 @@ T_INC = "anomaly_incidents"
 T_OEE = "oee_hourly"
 T_TREND = "trend_warnings"
 T_MAN = "manual_documents"
-TARGETS = (T_MEAS, T_INC, T_OEE, T_TREND, T_MAN)
+T_CFG = "settings"
+TARGETS = (T_MEAS, T_INC, T_OEE, T_TREND, T_MAN, T_CFG)
 
 OEE_CAGG = "oee_hourly"
 HOUR = timedelta(hours=1)
@@ -506,6 +511,66 @@ async def sync_manuals_once(local, cloud) -> tuple[int, bool]:
     return len(send) + len(gone), False
 
 
+# ---------- 設定表（整張比對） ----------
+
+# 表 → (主鍵欄位, 要同步的欄位)
+CONFIG_TABLES = {
+    "tag_limits": (["device_model", "tag_name"],
+                   ["device_model", "tag_name", "normal_lo", "normal_hi", "warning", "danger",
+                    "scale_lo", "scale_hi", "updated_at", "updated_by"]),
+    "product_specs": (["product_id"], ["product_id", "name", "ideal_cycle_s", "updated_at", "updated_by"]),
+    "shift_definitions": (["id"], ["id", "effective_from", "name", "start_hour", "end_hour", "updated_at", "updated_by"]),
+}
+
+
+async def config_ready(local, cloud) -> bool:
+    """雲端要有三張設定表；本地至少要有 006 的 product_specs（tag_limits 是 008，缺了只略過那張）"""
+    reason = None
+    if not await local.fetchval("SELECT to_regclass('product_specs') IS NOT NULL"):
+        reason = "本地還沒執行 migration 006"
+    elif not await cloud.fetchval("""SELECT to_regclass('tag_limits') IS NOT NULL
+                                     AND to_regclass('product_specs') IS NOT NULL
+                                     AND to_regclass('shift_definitions') IS NOT NULL"""):
+        reason = "雲端還沒執行 db/cloud/006_settings.sql"
+    if reason and reason != _skip_reason.get(T_CFG):
+        print(f"[SYNC] {T_CFG} 先不同步：{reason}")
+    _skip_reason[T_CFG] = reason
+    return reason is None
+
+
+async def sync_config_once(local, cloud) -> tuple[int, bool]:
+    """三張設定表各自整張比對；回傳 (新增＋更新＋刪除的列數, False)"""
+    changed = 0
+    for table, (keys, cols) in CONFIG_TABLES.items():
+        if not await local.fetchval("SELECT to_regclass($1) IS NOT NULL", table):
+            continue                     # 本地沒有這張表（例如沒跑 008）：略過
+        rows = await local.fetch(f"SELECT {', '.join(cols)} FROM {table}")
+        key_list = [tuple(r[k] for k in keys) for r in rows]
+        async with cloud.transaction():
+            # 先刪本地已經沒有的列（改班別時舊 id 刪掉、新 id 新增，先刪才不會跟新的撞在一起）
+            existing = await cloud.fetch(f"SELECT {', '.join(keys)} FROM {table}")
+            gone = [tuple(r[k] for k in keys) for r in existing if tuple(r[k] for k in keys) not in set(key_list)]
+            for g in gone:
+                where = " AND ".join(f"{k} = ${i + 1}" for i, k in enumerate(keys))
+                await cloud.execute(f"DELETE FROM {table} WHERE {where}", *g)
+            changed += len(gone)
+            # 新增或有變動的才寫（IS DISTINCT FROM：完全一樣的列不會每輪重寫）
+            non_key = [c for c in cols if c not in keys]
+            for r in rows:
+                status = await cloud.execute(f"""
+                    INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(f'${i + 1}' for i in range(len(cols)))})
+                    ON CONFLICT ({', '.join(keys)}) DO UPDATE
+                    SET {', '.join(f'{c} = EXCLUDED.{c}' for c in non_key)}, synced_at = now()
+                    WHERE ({', '.join(f'{table}.{c}' for c in non_key)})
+                          IS DISTINCT FROM ({', '.join(f'EXCLUDED.{c}' for c in non_key)})
+                """, *[r[c] for c in cols])
+                changed += int(status.split()[-1])
+    if changed:
+        print(f"[SYNC] 設定表：{changed} 列有變動（門檻、品號標準週期、班別）")
+    await set_watermark(local, T_CFG, await local.fetchval("SELECT now()"), changed)
+    return changed, False
+
+
 # 同一時間只能有一個同步在跑：docker 裡的 backend 和本機 uvicorn 同時開著時，第二個會自動略過；
 # tools.sync_admin rewind 也會先拿這把鎖，避免調指標時剛好被同步覆蓋
 LOCK_KEY = 0x5CADA_5C  # 任意固定數字
@@ -526,6 +591,8 @@ async def sync_cycle(local, cloud) -> dict | None:
             plan.append((T_TREND, sync_trend_once))
         if await manuals_ready(local, cloud):
             plan.append((T_MAN, sync_manuals_once))
+        if await config_ready(local, cloud):
+            plan.append((T_CFG, sync_config_once))
         for target, fn in plan:
             total = 0
             for _ in range(MAX_BATCHES_PER_CYCLE):
