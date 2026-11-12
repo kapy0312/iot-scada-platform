@@ -2,6 +2,7 @@ import json
 
 from fastapi import APIRouter, Query
 
+from db.anomaly_writer import has_limit_columns
 from db.pool import acquire
 from routers.trend import pre_warnings_of
 
@@ -87,9 +88,10 @@ async def get_incidents(
 ):
     """查詢事件（一次故障一筆）：起訖時間、等級、峰值、最嚴重時刻的診斷與手冊來源，以及事前的趨勢預警"""
     async with acquire() as conn:
-        rows = await conn.fetch("""
+        extra = ", limits, limits_changed" if await has_limit_columns(conn) else ""
+        rows = await conn.fetch(f"""
             SELECT id, device_id, started_at, ended_at, records, level, severity,
-                   peak, min_score, ai_analysis, ai_source
+                   peak, min_score, ai_analysis, ai_source{extra}
             FROM anomaly_incidents
             WHERE device_id = $1
               AND ended_at > NOW() - ($2 || ' hours')::INTERVAL
@@ -113,5 +115,8 @@ async def get_incidents(
         "ai_source": _json_field(r["ai_source"]),
         # 事前預警：到警戒（或危險）值之前，趨勢預警提前多久發現；沒有預警時是空清單
         "pre_warnings": pre.get(r["id"], []),
+        # 事件開始時的門檻（migration 010）；舊事件是 null，畫面改用現行門檻判斷
+        "limits": _json_field(r.get("limits")),
+        "limits_changed": bool(r.get("limits_changed")),
     } for r in rows]
     return {"device_id": device_id, "hours": hours, "count": len(incidents), "incidents": incidents}

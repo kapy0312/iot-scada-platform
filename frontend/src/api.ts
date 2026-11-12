@@ -214,6 +214,9 @@ export interface Incident {
   ai_analysis: string | null;
   ai_source: ManualSource | null;
   pre_warnings?: TrendWarning[];      // 這次事件之前的趨勢預警（沒有 migration 007 時是空的）
+  /** 事件開始時的門檻（migration 010）；舊事件是 null，改用現行門檻判斷 */
+  limits?: { version?: string; tags: Record<string, { normal: [number, number]; warning: number; danger: number }> } | null;
+  limits_changed?: boolean;           // 事件進行中門檻被改過
 }
 
 export async function getIncidents(deviceId: string, hours: number): Promise<Incident[]> {

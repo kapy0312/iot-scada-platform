@@ -26,7 +26,8 @@ from mcp.types import ToolAnnotations
 from core.config import get_database_url
 from core import limits
 from core.device_profile import ANOMALY_THRESHOLD, DEVICE_PROFILES, LEVEL_TEXT, base_device_id, evaluate, get_profile
-from core.incidents import DIAGNOSIS_TYPES, diagnosis_type
+from core.incidents import DIAGNOSIS_TYPES, diagnosis_type, diff_text, limit_diffs, spec_at_time
+from db.anomaly_writer import has_limit_columns
 from rag.embedder import embed_text
 from rag import store as manual_store
 
@@ -131,6 +132,7 @@ def _json_field(v):
 def _incident_view(r) -> dict:
     """事件表（anomaly_incidents）的一列 → 給 Claude 看的格式"""
     profile = get_profile(r["device_id"]) or {"tags": {}}
+    snapshot = _json_field(r.get("limits"))      # 事件開始時的門檻（migration 010；舊事件沒有）
     peak = _json_field(r["peak"]) or {}
     pmax, pmin = peak.get("max", {}), peak.get("min", {})
     tags = list(profile["tags"]) or sorted(set(pmax) | set(pmin))
@@ -142,6 +144,7 @@ def _incident_view(r) -> dict:
         info = {"max": _round(hi), "min": _round(lo)}
         spec = profile["tags"].get(tag)
         if spec:
+            spec = spec_at_time(spec, snapshot, tag)
             info["label"] = spec["label"]
             info["unit"] = spec["unit"]
             # 偏高的看最大值、偏低的看最小值，取比較嚴重的那一個
@@ -151,6 +154,14 @@ def _incident_view(r) -> dict:
         signals[tag] = info
 
     src = _json_field(r["ai_source"])
+    diffs = limit_diffs(profile, snapshot)
+    notes = []
+    if diffs:
+        notes.append("事件當時的門檻跟現在不同，上面的判定用當時的門檻：" + "、".join(diff_text(d) for d in diffs))
+    if r.get("limits_changed"):
+        notes.append("事件進行中門檻被修改過，判定以事件開始時的門檻為準")
+    if snapshot is None:
+        notes.append("這筆事件沒有記錄當時的門檻（migration 010 之前），判定用現行門檻")
     return {
         "incident_id": r["id"],
         "device_id": r["device_id"],
@@ -171,6 +182,7 @@ def _incident_view(r) -> dict:
             "page": src.get("page"),
             "match": {"full": "條件完全符合", "partial": "部分符合", "reference": "參考章節"}.get(src.get("match_type")),
         } if src else None,
+        "limits_note": "；".join(notes) or None,
     }
 
 
@@ -198,11 +210,14 @@ async def list_anomalies(
     diagnosis_type 說明這份診斷可不可信：標示「舊版診斷」的事件，章節是模型自己寫的、
     沒有 manual_source，可能挑錯章節或與讀值矛盾；分析時不要把它當成系統錯誤，
     需要時用 search_manual 依讀值重新查手冊。
+
+    peak_level 用「事件當時的門檻」判定（門檻可在網頁上修改）；limits_note 說明當時門檻跟現在哪裡不同、
+    或事件進行中門檻被改過。判讀診斷是否合理時，要以當時的門檻為準。
     """
     start_dt, end_dt = _time_range(start, end, hours)
     sql = """
         SELECT id, device_id, started_at, ended_at, records, level, severity,
-               peak, min_score, ai_analysis, ai_source
+               peak, min_score, ai_analysis, ai_source{extra}
         FROM anomaly_incidents
         WHERE started_at < $2 AND ended_at >= $1
     """
@@ -214,7 +229,8 @@ async def list_anomalies(
 
     conn = await _connect_db()
     try:
-        rows = await conn.fetch(sql, *args)
+        extra = ", limits, limits_changed" if await has_limit_columns(conn) else ""
+        rows = await conn.fetch(sql.format(extra=extra), *args)
     finally:
         await conn.close()
 

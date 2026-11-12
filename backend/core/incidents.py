@@ -52,7 +52,48 @@ def severity_and_level(device_id: str, readings: dict) -> tuple[int, str]:
     return total, worst
 
 
-def new_incident(device_id: str, at: datetime) -> dict:
+def limits_snapshot(device_id: str, version: str = "") -> dict | None:
+    """事件開始時的門檻（只存判斷用的正常範圍、警戒、危險；刻度只影響畫面，不存）"""
+    profile = get_profile(device_id)
+    if not profile:
+        return None
+    return {
+        "version": version,
+        "tags": {tag: {"normal": list(s["normal"]), "warning": s["warning"], "danger": s["danger"]}
+                 for tag, s in profile["tags"].items()},
+    }
+
+
+def spec_at_time(spec: dict, snapshot: dict | None, tag: str) -> dict:
+    """事件有存當時門檻就用當時的，沒有（010 之前的舊事件）就用現行的"""
+    old = (snapshot or {}).get("tags", {}).get(tag)
+    return {**spec, **old} if old else spec
+
+
+def limit_diffs(profile: dict, snapshot: dict | None) -> list[dict]:
+    """當時門檻跟現行不同的地方，例如 [{"tag": "temperature", "label": "溫度", "field": "warning", "then": 69, "now": 85}]"""
+    out = []
+    for tag, spec in (profile or {}).get("tags", {}).items():
+        old = (snapshot or {}).get("tags", {}).get(tag)
+        if not old:
+            continue
+        for field in ("normal", "warning", "danger"):
+            then, now = old.get(field), spec.get(field)
+            if then is not None and list(then if isinstance(then, list) else [then]) != list(now if isinstance(now, list) else [now]):
+                out.append({"tag": tag, "label": spec.get("label", tag), "field": field, "then": then, "now": now})
+    return out
+
+
+FIELD_TEXT = {"normal": "正常範圍", "warning": "警戒值", "danger": "危險值"}
+
+
+def diff_text(d: dict) -> str:
+    """「溫度警戒值 69（現行 85）」"""
+    fmt = lambda v: "–".join(f"{x:g}" for x in v) if isinstance(v, list) else f"{v:g}"
+    return f"{d['label']}{FIELD_TEXT[d['field']]} {fmt(d['then'])}（現行 {fmt(d['now'])}）"
+
+
+def new_incident(device_id: str, at: datetime, version: str = "") -> dict:
     return {
         "id": None,
         "device_id": device_id,
@@ -66,6 +107,8 @@ def new_incident(device_id: str, at: datetime) -> dict:
         "ai_analysis": None,
         "ai_source": None,
         "diag_severity": -1,   # 目前這份診斷產生時的嚴重度；只在記憶體裡用，不寫入資料庫
+        "limits": limits_snapshot(device_id, version),   # 事件開始時的門檻（migration 010）
+        "limits_changed": False,                          # 事件進行中門檻被改過
     }
 
 

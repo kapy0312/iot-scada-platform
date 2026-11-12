@@ -18,6 +18,14 @@
 趨勢預警紀錄（需要本地 migration 007 與雲端 004_trend.sql，任一邊沒有就略過）：
 - 跟事件表同一套：依 updated_at 送，往回重疊 2 分鐘，雲端只用較新的版本覆蓋
 
+事件的當時門檻（本地 migration 010、雲端 005）：
+- 兩邊都有 limits、limits_changed 欄位才一起送；缺一邊就只送原本的欄位，不影響事件同步
+手冊（本地 migration 009、雲端 005，給 Phase 3 雲端 MCP 查手冊）：
+- 手冊很少（幾份、幾十段），每輪直接比對兩邊的文件清單，不用 watermark 往前推
+- 同一份 PDF（file_hash）內容不會變：段落只在雲端沒有或段數不同時送；勾選改變只更新文件那一列
+- 本地刪掉的手冊，雲端標 deleted_at（edge_writer 不能刪文件）；同一份 PDF 重新上傳會清掉 deleted_at
+- 唯一的刪除：同一份 PDF 重新切塊時，清掉雲端不在本地的舊段落（edge_writer 只有 manual_chunks 有 DELETE）
+
 設定（.env）：
 - CLOUD_SYNC_ENABLED=true 才會啟動
 - TIGER_EDGE_URL：edge_writer 帳號的連線字串
@@ -39,7 +47,8 @@ T_MEAS = "measurements_10s"
 T_INC = "anomaly_incidents"
 T_OEE = "oee_hourly"
 T_TREND = "trend_warnings"
-TARGETS = (T_MEAS, T_INC, T_OEE, T_TREND)
+T_MAN = "manual_documents"
+TARGETS = (T_MEAS, T_INC, T_OEE, T_TREND, T_MAN)
 
 OEE_CAGG = "oee_hourly"
 HOUR = timedelta(hours=1)
@@ -63,6 +72,10 @@ OEE_COLS = ["bucket", "device_id", "product_id", "run_s", "idle_s", "fault_s", "
             "planned_stop_s", "data_s", "unknown_s", "good", "ng", "samples", "ideal_cycle_s", "ideal_s"]
 INC_COLS = ["id", "device_id", "started_at", "ended_at", "records", "level", "severity",
             "peak", "min_score", "ai_analysis", "ai_source", "updated_at"]
+INC_LIMIT_COLS = ["limits", "limits_changed"]      # 本地 010、雲端 005 都有才送
+DOC_COLS = ["file_hash", "filename", "device_id", "doc_title", "enabled", "chunk_count",
+            "chunker_version", "embed_model", "created_at", "updated_at"]
+CHUNK_COLS = ["id", "file_hash", "chunk_index", "section", "page", "text", "embedding"]
 TREND_COLS = ["id", "device_id", "tag_name", "target_level", "threshold", "started_at", "ended_at",
               "first_eta_s", "min_eta_s", "slope_per_min", "value_at_start", "value_at_end",
               "outcome", "reached_at", "incident_id", "updated_at"]
@@ -160,24 +173,48 @@ async def upsert_measurements(cloud, rows: list) -> None:
         """)
 
 
-async def upsert_incidents(cloud, rows: list) -> None:
+async def upsert_incidents(cloud, rows: list, cols: list[str] = INC_COLS) -> None:
+    """cols 可能多了 limits、limits_changed（兩邊都跑過 010／005 時）"""
+    with_limits = "limits" in cols
+    tmp = "_in_inc2" if with_limits else "_in_inc"
     async with cloud.transaction():
-        await cloud.execute("""
-            CREATE TEMP TABLE IF NOT EXISTS _in_inc (
+        await cloud.execute(f"""
+            CREATE TEMP TABLE IF NOT EXISTS {tmp} (
                 id bigint, device_id text, started_at timestamptz, ended_at timestamptz,
                 records integer, level text, severity integer, peak jsonb, min_score double precision,
                 ai_analysis text, ai_source jsonb, updated_at timestamptz
+                {", limits jsonb, limits_changed boolean" if with_limits else ""}
             ) ON COMMIT DELETE ROWS
         """)
-        await cloud.copy_records_to_table("_in_inc", records=rows, columns=INC_COLS)
-        sets = ", ".join(f"{c} = EXCLUDED.{c}" for c in INC_COLS if c != "id")
+        await cloud.copy_records_to_table(tmp, records=rows, columns=cols)
+        sets = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c != "id")
         # 只用較新的版本覆蓋：重送舊的那一版時不會把雲端改回去
         await cloud.execute(f"""
-            INSERT INTO anomaly_incidents ({", ".join(INC_COLS)})
-            SELECT {", ".join(INC_COLS)} FROM _in_inc
+            INSERT INTO anomaly_incidents ({", ".join(cols)})
+            SELECT {", ".join(cols)} FROM {tmp}
             ON CONFLICT (id) DO UPDATE SET {sets}, synced_at = now()
             WHERE anomaly_incidents.updated_at <= EXCLUDED.updated_at
         """)
+
+
+async def has_columns(conn, table: str, cols: list[str]) -> bool:
+    return await conn.fetchval("""
+        SELECT count(*) = cardinality($2::text[]) FROM information_schema.columns
+        WHERE table_name = $1 AND column_name = ANY($2::text[])
+    """, table, cols)
+
+
+async def incident_cols(local, cloud) -> list[str]:
+    """兩邊都有門檻欄位才一起送；缺一邊只送原本的欄位（原因改變時提醒一次）"""
+    reason = None
+    if not await has_columns(local, "anomaly_incidents", INC_LIMIT_COLS):
+        reason = "本地還沒執行 migration 010"
+    elif not await has_columns(cloud, "anomaly_incidents", INC_LIMIT_COLS):
+        reason = "雲端還沒執行 db/cloud/005_manuals_limits.sql"
+    if reason and reason != _skip_reason.get("incident_limits"):
+        print(f"[SYNC] 事件的當時門檻先不同步：{reason}")
+    _skip_reason["incident_limits"] = reason
+    return INC_COLS if reason else INC_COLS + INC_LIMIT_COLS
 
 
 async def upsert_oee(cloud, rows: list) -> None:
@@ -259,23 +296,24 @@ async def sync_measurements_once(local, cloud, max_window: timedelta = MAX_WINDO
     return len(records), end < upper
 
 
-async def sync_incidents_once(local, cloud, batch: int = INC_BATCH) -> tuple[int, bool]:
+async def sync_incidents_once(local, cloud, batch: int = INC_BATCH, cols: list[str] | None = None) -> tuple[int, bool]:
+    cols = cols or await incident_cols(local, cloud)
     wm = await get_watermark(local, T_INC) or EPOCH
     upper = await local.fetchval("SELECT now() - $1::interval", INC_SETTLE)
     if upper <= wm:
         return 0, False
     rows = await local.fetch(f"""
-        SELECT {", ".join(INC_COLS)} FROM anomaly_incidents
+        SELECT {", ".join(cols)} FROM anomaly_incidents
         WHERE updated_at >= $1 AND updated_at < $2 AND NOT (device_id LIKE ANY($3::text[]))
         ORDER BY updated_at, id
         LIMIT $4
     """, wm - OVERLAP[T_INC], upper, exclude_patterns(), batch)
     records = [tuple(r) for r in rows]
     if records:
-        await upsert_incidents(cloud, records)
+        await upsert_incidents(cloud, records, cols)
     more = len(records) == batch
     # 一批送滿：指標只推到這批最後一筆（下一輪往回 2 分鐘再接）；沒送滿：已經追到 upper
-    new_wm = max(wm, records[-1][INC_COLS.index("updated_at")]) if more else upper
+    new_wm = max(wm, records[-1][cols.index("updated_at")]) if more else upper
     await set_watermark(local, T_INC, new_wm, len(records))
     return len(records), more
 
@@ -382,6 +420,92 @@ async def sync_oee_once(local, cloud, max_window: timedelta = OEE_MAX_WINDOW) ->
     return len(records), end < upper
 
 
+# ---------- 手冊（文件清單比對） ----------
+
+async def manuals_ready(local, cloud) -> bool:
+    return await table_ready(local, cloud, T_MAN, ("manual_documents", "manual_chunks"),
+                             "本地還沒執行 migration 009", "雲端還沒執行 db/cloud/005_manuals_limits.sql")
+
+
+async def upsert_manual_chunks(cloud, rows: list) -> None:
+    """向量用文字 '[…]' 送進暫存表，再轉成 vector；段落 id 沿用本地的，重送只會覆蓋"""
+    await cloud.execute("""
+        CREATE TEMP TABLE IF NOT EXISTS _in_chunks (
+            id uuid, file_hash text, chunk_index integer, section text, page integer, text text, embedding text
+        ) ON COMMIT DELETE ROWS
+    """)
+    await cloud.copy_records_to_table("_in_chunks", records=rows, columns=CHUNK_COLS)
+    await cloud.execute(f"""
+        INSERT INTO manual_chunks ({", ".join(CHUNK_COLS)})
+        SELECT id, file_hash, chunk_index, section, page, text, embedding::vector FROM _in_chunks
+        ON CONFLICT (id) DO UPDATE
+        SET chunk_index = EXCLUDED.chunk_index, section = EXCLUDED.section, page = EXCLUDED.page,
+            text = EXCLUDED.text, embedding = EXCLUDED.embedding
+    """)
+
+
+def plan_manuals(local_docs: list[dict], cloud_docs: dict[str, dict]) -> tuple[list[dict], list[str]]:
+    """
+    回傳 (要送的文件, 雲端要標刪除的 file_hash)
+    要送：雲端沒有、被標刪除過、本地比較新（勾選改過）、或段數不同（上次只送了一半）
+    """
+    send = []
+    for d in local_docs:
+        c = cloud_docs.get(d["file_hash"])
+        if (c is None or c["deleted_at"] is not None or c["updated_at"] < d["updated_at"]
+                or c["n_chunks"] != d["n_chunks"]):
+            send.append({**d, "need_chunks": c is None or c["n_chunks"] != d["n_chunks"]})
+    local_hashes = {d["file_hash"] for d in local_docs}
+    gone = [fh for fh, c in cloud_docs.items() if fh not in local_hashes and c["deleted_at"] is None]
+    return send, gone
+
+
+async def sync_manuals_once(local, cloud) -> tuple[int, bool]:
+    """比對兩邊的文件清單，有差異的整份處理；回傳 (處理幾份, False)"""
+    local_docs = [dict(r) for r in await local.fetch(f"""
+        SELECT {", ".join("d." + c for c in DOC_COLS)}, count(c.id) AS n_chunks
+        FROM manual_documents d LEFT JOIN manual_chunks c USING (file_hash)
+        GROUP BY d.file_hash
+    """)]
+    cloud_docs = {r["file_hash"]: dict(r) for r in await cloud.fetch("""
+        SELECT d.file_hash, d.updated_at, d.deleted_at,
+               (SELECT count(*) FROM manual_chunks c WHERE c.file_hash = d.file_hash) AS n_chunks
+        FROM manual_documents d
+    """)}
+    send, gone = plan_manuals(local_docs, cloud_docs)
+    for d in send:
+        chunks = []
+        if d["need_chunks"]:
+            chunks = [tuple(r) for r in await local.fetch(f"""
+                SELECT {", ".join(CHUNK_COLS[:-1])}, embedding::text
+                FROM manual_chunks WHERE file_hash = $1 ORDER BY chunk_index
+            """, d["file_hash"])]
+        async with cloud.transaction():      # 文件與段落一起成功或一起失敗，不會只送一半
+            await cloud.execute(f"""
+                INSERT INTO manual_documents ({", ".join(DOC_COLS)}, deleted_at)
+                VALUES ({", ".join(f"${i + 1}" for i in range(len(DOC_COLS)))}, NULL)
+                ON CONFLICT (file_hash) DO UPDATE
+                SET {", ".join(f"{c} = EXCLUDED.{c}" for c in DOC_COLS if c != "file_hash")},
+                    deleted_at = NULL, synced_at = now()
+            """, *[d[c] for c in DOC_COLS])
+            if d["need_chunks"]:
+                # 同一份 PDF 重新切塊（段落 id 換了）：先清掉雲端不在本地的舊段落，段數才會一致
+                await cloud.execute(
+                    "DELETE FROM manual_chunks WHERE file_hash = $1 AND NOT (id = ANY($2::uuid[]))",
+                    d["file_hash"], [r[0] for r in chunks])
+            if chunks:
+                await upsert_manual_chunks(cloud, chunks)
+        print(f"[SYNC] 手冊 {d['filename']}：{'送出 ' + str(len(chunks)) + ' 段' if chunks else '更新勾選'}")
+    if gone:
+        await cloud.execute("""
+            UPDATE manual_documents SET deleted_at = now(), enabled = false, synced_at = now()
+            WHERE file_hash = ANY($1::text[])
+        """, gone)
+        print(f"[SYNC] 手冊：本地已刪除 {len(gone)} 份，雲端標記 deleted_at")
+    await set_watermark(local, T_MAN, await local.fetchval("SELECT now()"), len(send) + len(gone))
+    return len(send) + len(gone), False
+
+
 # 同一時間只能有一個同步在跑：docker 裡的 backend 和本機 uvicorn 同時開著時，第二個會自動略過；
 # tools.sync_admin rewind 也會先拿這把鎖，避免調指標時剛好被同步覆蓋
 LOCK_KEY = 0x5CADA_5C  # 任意固定數字
@@ -393,11 +517,15 @@ async def sync_cycle(local, cloud) -> dict | None:
         return None
     try:
         sent = {}
-        plan = [(T_MEAS, sync_measurements_once), (T_INC, sync_incidents_once)]
+        cols = await incident_cols(local, cloud)
+        plan = [(T_MEAS, sync_measurements_once),
+                (T_INC, lambda lo, cl: sync_incidents_once(lo, cl, cols=cols))]
         if await oee_ready(local, cloud):
             plan.append((T_OEE, sync_oee_once))
         if await trend_ready(local, cloud):
             plan.append((T_TREND, sync_trend_once))
+        if await manuals_ready(local, cloud):
+            plan.append((T_MAN, sync_manuals_once))
         for target, fn in plan:
             total = 0
             for _ in range(MAX_BATCHES_PER_CYCLE):

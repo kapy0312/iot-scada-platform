@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from datetime import datetime
 
 from db.pool import acquire
@@ -13,8 +14,37 @@ def _json(v) -> str | None:
     return None if v is None else json.dumps(v, ensure_ascii=False)
 
 
+# migration 010 的 limits、limits_changed 欄位在不在：沒跑 010 時照舊寫入，跑完後最多 5 分鐘自動開始寫
+_limit_cols: bool | None = None
+_limit_cols_checked = 0.0
+LIMIT_COLS_RECHECK = 300
+
+
+async def has_limit_columns(conn) -> bool:
+    global _limit_cols, _limit_cols_checked
+    if _limit_cols is None or (not _limit_cols and time.monotonic() - _limit_cols_checked > LIMIT_COLS_RECHECK):
+        _limit_cols = await conn.fetchval("""
+            SELECT count(*) = 2 FROM information_schema.columns
+            WHERE table_name = 'anomaly_incidents' AND column_name IN ('limits', 'limits_changed')
+        """)
+        _limit_cols_checked = time.monotonic()
+    return bool(_limit_cols)
+
+
 async def _upsert_incident(conn, inc: dict) -> None:
     """事件第一次寫入時新增並取得 id，之後都是更新"""
+    was_new = inc["id"] is None
+    try:
+        async with conn.transaction():
+            await _upsert_incident_body(conn, inc)
+    except BaseException:
+        if was_new:
+            inc["id"] = None    # 交易沒成功，新增的那筆也被撤銷了；下一秒重新新增
+        raise
+
+
+async def _upsert_incident_body(conn, inc: dict) -> None:
+    with_limits = await has_limit_columns(conn)
     if inc["id"] is None:
         inc["id"] = await conn.fetchval("""
             INSERT INTO anomaly_incidents
@@ -36,6 +66,11 @@ async def _upsert_incident(conn, inc: dict) -> None:
             WHERE id = $1
         """, inc["id"], inc["ended_at"], inc["records"], inc["level"], inc["severity"],
             _json(inc["peak"]), inc["min_score"], inc["ai_analysis"], _json(inc["ai_source"]))
+    if with_limits:
+        # 當時門檻（migration 010）：跟上面在同一個交易裡，雲端同步不會讀到只寫一半的列
+        await conn.execute(
+            "UPDATE anomaly_incidents SET limits = $2::jsonb, limits_changed = $3 WHERE id = $1",
+            inc["id"], _json(inc.get("limits")), bool(inc.get("limits_changed")))
 
 
 async def record_anomaly(device_id: str, values: dict, anomaly: dict, incident: dict, at: datetime):

@@ -126,10 +126,17 @@ async def cmd_check() -> int:
                 print(f"✅ 可以讀取：trend_warnings {await conn.fetchval('SELECT count(*) FROM trend_warnings')} 筆")
             else:
                 print("（雲端還沒有 trend_warnings：執行 db/cloud/004_trend.sql 後才會同步趨勢預警紀錄）")
+            has_manual = await conn.fetchval("SELECT to_regclass('manual_documents') IS NOT NULL")
+            if has_manual:
+                docs = await conn.fetchval("SELECT count(*) FROM manual_documents WHERE deleted_at IS NULL")
+                chunks = await conn.fetchval("SELECT count(*) FROM manual_chunks")
+                print(f"✅ 可以讀取：manual_documents {docs} 份（未刪除）、manual_chunks {chunks} 段")
+            else:
+                print("（雲端還沒有 manual_documents：執行 db/cloud/005_manuals_limits.sql 後才會同步手冊）")
             for label, sql in (
                 ("刪除資料", "DELETE FROM measurements_10s WHERE false"),
                 ("改表結構", "ALTER TABLE measurements_10s ADD COLUMN _x int"),
-            ) + ((("寫入資料", "INSERT INTO anomaly_incidents (id, device_id, started_at, ended_at, records, "
+            ) + ((("刪除手冊", "DELETE FROM manual_documents WHERE false"),) if has_manual else ()) + ((("寫入資料", "INSERT INTO anomaly_incidents (id, device_id, started_at, ended_at, records, "
                    "level, severity, peak, updated_at) VALUES (-1, 'x', now(), now(), 1, 'x', 0, '{}', now())"),)
                  if role == "mcp_reader" else ()):
                 result = await _expect_denied(conn, sql)

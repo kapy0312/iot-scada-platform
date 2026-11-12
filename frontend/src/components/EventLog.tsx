@@ -7,6 +7,7 @@ import {
   type DeviceProfile,
   type Level,
   type TagKey,
+  type TagSpec,
 } from "../deviceProfile";
 
 interface Props {
@@ -35,8 +36,33 @@ const levelClass = (lv: Level) =>
  * 每個訊號顯示「最偏離正常」的那個值：
  * 偏高的看最大值、偏低的看最小值（例如機械卡滯時轉速掉到 1256，只看最大值會看不出來）
  */
+/** 事件有存當時門檻就用當時的（門檻可能在畫面上改過），沒有就用現行的 */
+function specAt(inc: Incident, profile: DeviceProfile, k: TagKey): TagSpec {
+  const old = inc.limits?.tags?.[k];
+  return old ? { ...profile.tags[k], normal: old.normal, warning: old.warning, danger: old.danger } : profile.tags[k];
+}
+
+const FIELD_TEXT = { normal: "正常範圍", warning: "警戒值", danger: "危險值" } as const;
+const numText = (v: number | [number, number]) => (Array.isArray(v) ? `${v[0]}–${v[1]}` : String(v));
+
+/** 當時門檻跟現行不同的地方，例如「溫度警戒值 69（現行 85）」 */
+function limitNotes(inc: Incident, profile: DeviceProfile): string[] {
+  const out: string[] = [];
+  for (const k of tagKeys(profile)) {
+    const old = inc.limits?.tags?.[k];
+    if (!old) continue;
+    const now = profile.tags[k];
+    for (const f of ["normal", "warning", "danger"] as const) {
+      if (numText(old[f]) !== numText(now[f])) {
+        out.push(`${now.label}${FIELD_TEXT[f]} ${numText(old[f])}（現行 ${numText(now[f])}）`);
+      }
+    }
+  }
+  return out;
+}
+
 function peakOf(inc: Incident, profile: DeviceProfile, k: TagKey): { text: string; level: Level } {
-  const spec = profile.tags[k];
+  const spec = specAt(inc, profile, k);
   const max = inc.peak?.max?.[k];
   const min = inc.peak?.min?.[k];
   if (typeof max !== "number" && typeof min !== "number") return { text: "—", level: "normal" };
@@ -180,6 +206,7 @@ export default function EventLog({ deviceId, isAnomaly, profile }: Props) {
                 const level = asLevel(inc.level);
                 const abnormal = abnormalOf(inc, profile);
                 const lead = leadOf(inc);
+                const notes = limitNotes(inc, profile);
                 return (
                   <tr key={inc.id}>
                     <td className="mono nowrap">{fmt(inc.started_at)}</td>
@@ -195,6 +222,17 @@ export default function EventLog({ deviceId, isAnomaly, profile }: Props) {
                             {p.label} <span className={`mono ${levelClass(p.level)}`}>{p.text}</span>
                           </span>
                         ))
+                      )}
+                      {(notes.length > 0 || inc.limits_changed) && (
+                        <div
+                          className="small muted"
+                          title="事件的判定用事件開始時的門檻；門檻之後在畫面上改過"
+                          style={{ whiteSpace: "normal", marginTop: 2 }}
+                        >
+                          {notes.length > 0 && <>當時門檻：{notes.join("、")}</>}
+                          {notes.length > 0 && inc.limits_changed && "；"}
+                          {inc.limits_changed && "事件進行中門檻有修改"}
+                        </div>
                       )}
                     </td>
                     <td className="nowrap">

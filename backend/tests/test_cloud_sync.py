@@ -74,7 +74,7 @@ INSERT INTO timescaledb_information.jobs VALUES
     (1001, 'policy_retention', 'plc_measurements', '{}');
 INSERT INTO timescaledb_information.job_stats VALUES (1000, NULL), (1001, now());
 
-DROP TABLE IF EXISTS plc_measurements_10s, sync_state, anomaly_incidents, trend_warnings;
+DROP TABLE IF EXISTS plc_measurements_10s, sync_state, anomaly_incidents, trend_warnings, manual_chunks, manual_documents;
 CREATE TABLE plc_measurements_10s (
     bucket timestamptz, device_id text, tag_name text,
     avg_v double precision, min_v double precision, max_v double precision, samples bigint);

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from asyncua import Client
 from core.device_profile import evaluate, get_production, get_profile, get_tags
-from core.incidents import INCIDENT_GAP_SECONDS, absorb, new_incident, severity_and_level
+from core.incidents import INCIDENT_GAP_SECONDS, absorb, limits_snapshot, new_incident, severity_and_level
 from core.production import RUN, STATE_TEXT, CounterTracker, RunGate, is_running
 from core.trend import TrendTracker
 from core import limits
@@ -268,6 +268,15 @@ async def _process_reading(values: dict, motor_enable: int = 1, production: dict
     _handle_trend_events(trend.update(device_id, values, profile["tags"], now, gate["status"] == "active"))
     abnormal = bool(anomaly.get("is_anomaly")) or rule_alarm
 
+    # 事件還沒結束（最後一次異常後 60 秒內）門檻被改：判斷仍以事件開始時的門檻為準，只標記起來讓畫面提示。
+    # 不能只在異常的那幾秒檢查：門檻調鬆時數值馬上變回正常，那幾秒根本不會進到下面的 if abnormal
+    if (_incident is not None and not _incident["limits_changed"] and _incident.get("limits")
+            and now - _last_anomaly_at <= INCIDENT_GAP_SECONDS
+            and (limits_snapshot(_incident["device_id"]) or {}).get("tags") != _incident["limits"]["tags"]):
+        _incident["limits_changed"] = True
+        if _incident["id"] is not None:
+            asyncio.create_task(save_incident(_incident))
+
     if abnormal:
         if (
             _incident is None
@@ -278,7 +287,7 @@ async def _process_reading(values: dict, motor_enable: int = 1, production: dict
             _latest_ai_analysis = ""
             _latest_ai_source = None
             _last_ollama_call = 0.0
-            _incident = new_incident(device_id, at)
+            _incident = new_incident(device_id, at, limits.version)
         _last_anomaly_at = now
 
         severity, worst = severity_and_level(device_id, values)
