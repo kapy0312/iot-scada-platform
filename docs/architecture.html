@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IIoT SCADA 完整架構圖</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f8f9fa; --fg:#1f2933; --muted:#5f6c7b; --line:#ced4da; --card:#ffffff;
+  --z-ot:#fff4e6; --z-lap:#e7f5ff; --z-fe:#ebfbee; --z-desk:#f8f0fc; --z-cloud:#fff0f6;
+  --box:#ffffff; --box-stroke:#868e96; --note:#fff9db;
+  --main:#d9480f; --alt:#6741d9; --support:#0b7285; --cloud:#c2255c; --gray:#868e96; --badge-fg:#ffffff;
+  --code-bg:#f1f3f5; --ok:#2b8a3e;
+  --sans:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Noto Sans TC",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#12151a; --fg:#e9ecef; --muted:#a0a8b3; --line:#3a4048; --card:#1b2027;
+    --z-ot:#2b2218; --z-lap:#17232f; --z-fe:#17261c; --z-desk:#241d30; --z-cloud:#2c1a23;
+    --box:#1f252d; --box-stroke:#6b7580; --note:#2b2916;
+    --main:#ff8a4c; --alt:#b197fc; --support:#3bc9db; --cloud:#f783ac; --gray:#8b95a1; --badge-fg:#12151a;
+    --code-bg:#14181d; --ok:#69db7c;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.7;overflow-x:hidden}
+.wrap{max-width:1240px;margin:0 auto;padding:24px 16px 56px}
+h1{font-size:1.6rem;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 18px;font-size:.95rem}
+.diagram{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card);-webkit-overflow-scrolling:touch}
+.diagram svg{display:block;width:100%;min-width:1200px;height:auto}
+.hint{display:none;color:var(--muted);font-size:.8rem;margin:6px 0 0}
+@media (max-width:900px){.hint{display:block}}
+/* svg 內部樣式 */
+.zone{stroke:var(--line);stroke-width:1}
+.z-ot{fill:var(--z-ot)} .z-lap{fill:var(--z-lap)} .z-fe{fill:var(--z-fe)} .z-desk{fill:var(--z-desk)} .z-cloud{fill:var(--z-cloud)}
+.scope{fill:none;stroke:var(--muted);stroke-width:1.3;stroke-dasharray:6 4}
+.scope-alt{stroke:var(--alt)}
+.legend{fill:var(--card);stroke:var(--line)}
+.lg{font:12px var(--sans);fill:var(--fg)}
+.bx{fill:var(--box);stroke:var(--box-stroke);stroke-width:1.2}
+.bx-main{stroke:var(--main);stroke-width:1.6}
+.bx-db{stroke:var(--box-stroke);stroke-width:2.2}
+.bx-note{fill:var(--note);stroke-dasharray:4 3}
+.bx-lane{stroke:var(--alt);stroke-width:1.4}
+.bx-support{stroke:var(--support);stroke-width:2}
+.bx-cloud{stroke:var(--cloud);stroke-width:1.8}
+.ln{fill:none;stroke-linejoin:round}
+.ln-main{stroke:var(--main);stroke-width:2.2}
+.ln-alt{stroke:var(--alt);stroke-width:1.8;stroke-dasharray:6 4}
+.ln-cloud{stroke:var(--cloud);stroke-width:2.2}
+.ln-gray{stroke:var(--gray);stroke-width:1}
+.ln-dash{stroke:var(--gray);stroke-width:1.2;stroke-dasharray:4 3}
+.mk-main{fill:var(--main)} .mk-alt{fill:var(--alt)} .mk-gray{fill:var(--gray)} .mk-cloud{fill:var(--cloud)}
+.tn{font:600 12px var(--mono);fill:var(--fg)}
+.tr{font:11px var(--sans);fill:var(--muted)}
+.lab{font:11px var(--mono);fill:var(--fg)}
+.zt{font:700 12px var(--sans);fill:var(--fg)}
+.bd{fill:var(--main)} .bd-c{fill:var(--cloud)}
+.bd-t{font:700 11px var(--mono);fill:var(--badge-fg);text-anchor:middle}
+/* 卡片 */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px;margin-top:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0}
+.card.full{grid-column:1/-1}
+.card h2{font-size:1.05rem;margin:0 0 8px}
+.card h2 .tag{font:500 .72rem var(--mono);color:var(--muted);margin-left:6px}
+.card ol,.card ul{margin:6px 0;padding-left:1.3rem}
+.card li{margin:5px 0}
+.card p{margin:6px 0}
+code,.m{font-family:var(--mono);font-size:.86em;background:var(--code-bg);padding:1px 5px;border-radius:4px}
+.n{display:inline-block;min-width:1.35em;text-align:center;border-radius:50%;background:var(--main);color:var(--badge-fg);font:700 .78rem var(--mono);margin-right:4px}
+.n.c{background:var(--cloud)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:500;white-space:nowrap}
+td:first-child{white-space:nowrap}
+details{margin:8px 0}
+summary{cursor:pointer;font-weight:500}
+pre{margin:6px 0 0;padding:12px;background:var(--code-bg);border-radius:8px;overflow-x:auto;font:.8rem/1.55 var(--mono)}
+pre code{background:none;padding:0;font-size:inherit}
+.sev{font:500 .75rem var(--mono);padding:1px 6px;border-radius:4px;border:1px solid var(--line);white-space:nowrap}
+.hi{color:var(--main);border-color:var(--main)} .md{color:var(--alt);border-color:var(--alt)} .lo{color:var(--support);border-color:var(--support)} .ok{color:var(--ok);border-color:var(--ok)}
+.foot{color:var(--muted);font-size:.82rem;margin-top:20px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>IIoT SCADA 完整架構圖</h1>
+<p class="sub">回答三個問題：一筆 PLC 數據從產生到上畫面走哪些路；一次異常怎麼變成有手冊依據的 AI 診斷；資料怎麼上雲讓 claude.ai 查得到。橘色實線是現場主流程，桃紅實線是雲端流程，紫色虛線是副流程，青色框是橫向支撐。更新於 2026-11-12（feature/cloud-sync）。</p>
+<div class="diagram" role="region" aria-label="系統架構圖，可左右捲動" tabindex="0">
+<svg viewBox="0 0 1200 1680" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="dt dd"><title id="dt">IIoT SCADA 完整系統架構圖</title><desc id="dd">PLC 數據從讀值、規格告警、Isolation Forest、趨勢預警、並行寫入與推送，到事件觸發 pgvector 章節檢索與本地 LLM 診斷，再同步到 Tiger Cloud 並由 AWS Lambda 上的 MCP server 提供給 claude.ai 查詢的完整路徑。</desc><defs>
+<marker id="ah-main" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10z" class="mk-main"/></marker>
+<marker id="ah-alt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10z" class="mk-alt"/></marker>
+<marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10z" class="mk-gray"/></marker>
+<marker id="ah-cloud" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10z" class="mk-cloud"/></marker>
+</defs>
+
+<!-- 圖例 -->
+<rect class="legend" x="12" y="10" width="1176" height="42" rx="8"/>
+<path class="ln ln-main" d="M28 31 L70 31" marker-end="url(#ah-main)"/>
+<text class="lg" x="78" y="35">現場主流程（數字為順序）</text>
+<path class="ln ln-cloud" d="M244 31 L286 31" marker-end="url(#ah-cloud)"/>
+<text class="lg" x="294" y="35">雲端流程</text>
+<path class="ln ln-alt" d="M372 31 L414 31" marker-end="url(#ah-alt)"/>
+<text class="lg" x="422" y="35">副流程（虛線）</text>
+<path class="ln ln-gray" d="M520 31 L562 31" marker-end="url(#ah-gray)"/>
+<text class="lg" x="570" y="35">一般連線</text>
+<rect class="zone z-lap" x="650" y="22" width="22" height="18" rx="4"/>
+<text class="lg" x="680" y="35">實體區域</text>
+<rect class="scope" x="752" y="22" width="22" height="18" rx="4"/>
+<text class="lg" x="782" y="35">邏輯範圍</text>
+<rect class="bx bx-note" x="856" y="22" width="22" height="18" rx="4"/>
+<text class="lg" x="886" y="35">設定／備註</text>
+<rect class="bx bx-support" x="972" y="22" width="22" height="18" rx="4"/>
+<text class="lg" x="1002" y="35">橫向支撐（貫穿各層）</text>
+
+<!-- 區域 -->
+<rect class="zone z-ot" x="12" y="72" width="200" height="728" rx="10"/>
+<text class="zt" x="24" y="90">OT 現場層（PLC）</text>
+<rect class="zone z-lap" x="282" y="72" width="646" height="728" rx="10"/>
+<text class="zt" x="294" y="90">筆電 Kevin-NB · 邊緣端（Docker）</text>
+<rect class="scope" x="294" y="104" width="622" height="512" rx="8"/>
+<text class="zt" x="306" y="121">FastAPI Backend iot-backend :8000（邏輯範圍）</text>
+<rect class="zone z-fe" x="988" y="72" width="200" height="226" rx="10"/>
+<text class="zt" x="1000" y="90">瀏覽器 · React 前端 :3000</text>
+<rect class="zone z-desk" x="988" y="304" width="200" height="338" rx="10"/>
+<text class="zt" x="1000" y="322">桌機 · 本地 AI 推論</text>
+<rect class="zone z-cloud" x="12" y="820" width="1176" height="250" rx="10"/>
+<text class="zt" x="24" y="838">雲端（us-east-1）· 本機的唯讀副本，給 claude.ai 在任何地方查詢</text>
+
+<!-- OT 層 -->
+<rect class="bx bx-note" x="22" y="114" width="180" height="88" rx="7"/>
+<text class="tn" x="112" y="138" text-anchor="middle">DB1 資料塊 (NS=3)</text>
+<text class="tr" x="112" y="156" text-anchor="middle">讀：轉速·溫度·壓力·振動·電流</text>
+<text class="tr" x="112" y="172" text-anchor="middle">機台狀態·良品·NG·品號</text>
+<text class="tr" x="112" y="188" text-anchor="middle">寫：啟停·轉速設定</text>
+<rect class="bx bx-main" x="22" y="224" width="180" height="64" rx="7"/>
+<text class="tn" x="112" y="252" text-anchor="middle">S7-1511T / PLCSIM</text>
+<text class="tr" x="112" y="269" text-anchor="middle">OPC UA :4840 · -SIM 後綴</text>
+<rect class="bx" x="22" y="310" width="180" height="64" rx="7"/>
+<text class="tn" x="112" y="338" text-anchor="middle">FB_MachineSim v0.3</text>
+<text class="tr" x="112" y="355" text-anchor="middle">一階延遲·故障 1～5·漸進劣化</text>
+<rect class="bx" x="22" y="396" width="180" height="64" rx="7"/>
+<text class="tn" x="112" y="424" text-anchor="middle">FB_Production</text>
+<text class="tr" x="112" y="441" text-anchor="middle">停機·換模·計數·品號</text>
+<rect class="bx" x="22" y="482" width="180" height="64" rx="7"/>
+<text class="tn" x="112" y="510" text-anchor="middle">plcsim_ctl.py</text>
+<text class="tr" x="112" y="527" text-anchor="middle">fault·drift·planned 情境控制</text>
+<rect class="bx" x="22" y="568" width="180" height="64" rx="7"/>
+<text class="tn" x="112" y="596" text-anchor="middle">Mock 模擬源</text>
+<text class="tr" x="112" y="613" text-anchor="middle">後端內建 · -MOCK 不上雲</text>
+<rect class="bx bx-note" x="22" y="654" width="180" height="64" rx="7"/>
+<text class="tn" x="112" y="682" text-anchor="middle">FX5U (SLMP)</text>
+<text class="tr" x="112" y="699" text-anchor="middle">另一分支 fx5u-slmp</text>
+<rect class="bx bx-note" x="22" y="728" width="180" height="60" rx="7"/>
+<text class="tn" x="112" y="752" text-anchor="middle">TIA Portal V20</text>
+<text class="tr" x="112" y="769" text-anchor="middle">DB1 取消優化·OPC UA 存取</text>
+<path class="ln ln-gray" d="M112 310 L112 288" marker-end="url(#ah-gray)"/>
+<path class="ln ln-gray" d="M112 482 L112 460"/>
+<path class="ln ln-gray" d="M202 514 L222 514 L222 278 L202 278" marker-end="url(#ah-gray)"/>
+<text class="lab" x="228" y="440" text-anchor="start">寫入</text>
+
+<!-- Backend：第一列 routers -->
+<rect class="bx" x="306" y="134" width="544" height="52" rx="7"/>
+<text class="tn" x="578" y="156" text-anchor="middle">routers/ · 登入 session · X-SCADA-Request</text>
+<text class="tr" x="578" y="173" text-anchor="middle">REST：控制·門檻·手冊·OEE·預警·事件　WebSocket：/ws/realtime</text>
+
+<!-- 第二列 -->
+<rect class="bx bx-main" x="306" y="224" width="144" height="64" rx="7"/>
+<text class="tn" x="378" y="252" text-anchor="middle">plc_simulator.py</text>
+<text class="tr" x="378" y="269" text-anchor="middle">每秒讀值·規格判定</text>
+<rect class="bx bx-main" x="506" y="224" width="144" height="64" rx="7"/>
+<text class="tn" x="578" y="252" text-anchor="middle">ml/inferencer.py</text>
+<text class="tr" x="578" y="269" text-anchor="middle">IF·25 特徵·連續 5 秒</text>
+<rect class="bx bx-main" x="706" y="224" width="144" height="64" rx="7"/>
+<text class="tn" x="778" y="252" text-anchor="middle">ws_manager.py</text>
+<text class="tr" x="778" y="269" text-anchor="middle">廣播給所有連線</text>
+
+<!-- 第三列 -->
+<rect class="bx bx-main" x="506" y="334" width="144" height="64" rx="7"/>
+<text class="tn" x="578" y="362" text-anchor="middle">core/incidents.py</text>
+<text class="tr" x="578" y="379" text-anchor="middle">事件合併·當時門檻</text>
+<rect class="bx bx-main" x="706" y="334" width="144" height="64" rx="7"/>
+<text class="tn" x="778" y="362" text-anchor="middle">ollama_analyzer.py</text>
+<text class="tr" x="778" y="379" text-anchor="middle">程式選章節·冷卻 60 秒</text>
+
+<!-- 第四列 -->
+<rect class="bx bx-main" x="506" y="444" width="144" height="64" rx="7"/>
+<text class="tn" x="578" y="472" text-anchor="middle">core/trend.py</text>
+<text class="tr" x="578" y="489" text-anchor="middle">Theil–Sen·到線 ETA</text>
+<rect class="bx bx-main" x="706" y="444" width="144" height="64" rx="7"/>
+<text class="tn" x="778" y="472" text-anchor="middle">rag/store.py</text>
+<text class="tr" x="778" y="489" text-anchor="middle">RAG_BACKEND=pgvector</text>
+
+<!-- 第五列 -->
+<rect class="bx bx-main" x="306" y="534" width="144" height="64" rx="7"/>
+<text class="tn" x="378" y="562" text-anchor="middle">db/*_writer.py</text>
+<text class="tr" x="378" y="579" text-anchor="middle">量測·狀態·事件·預警</text>
+<rect class="bx" x="506" y="534" width="144" height="64" rx="7"/>
+<text class="tn" x="578" y="562" text-anchor="middle">limits · RunGate</text>
+<text class="tr" x="578" y="579" text-anchor="middle">門檻重載·恢復期</text>
+
+<!-- 資料庫列 -->
+<rect class="bx bx-db" x="306" y="644" width="544" height="84" rx="7"/>
+<text class="tn" x="578" y="666" text-anchor="middle">TimescaleDB :5435（容器 timescaledb，內建 pgvector 0.8.1）</text>
+<text class="tr" x="578" y="686" text-anchor="middle">plc_measurements（每秒）→ plc_measurements_10s · machine_status → oee_hourly</text>
+<text class="tr" x="578" y="703" text-anchor="middle">anomaly_incidents · trend_warnings · tag_limits · audit_log · app_users</text>
+<text class="tr" x="578" y="720" text-anchor="middle">manual_documents · manual_chunks（1024 維 · HNSW cosine）</text>
+<rect class="bx bx-cloud" x="306" y="746" width="200" height="44" rx="7"/>
+<text class="tn" x="406" y="764" text-anchor="middle">sync/cloud_sync.py</text>
+<text class="tr" x="406" y="780" text-anchor="middle">watermark＋upsert·advisory lock</text>
+<rect class="bx" x="522" y="746" width="168" height="44" rx="7"/>
+<text class="tn" x="606" y="764" text-anchor="middle">mcp_server.py</text>
+<text class="tr" x="606" y="780" text-anchor="middle">本機 MCP（stdio）</text>
+<rect class="bx bx-note" x="706" y="746" width="144" height="44" rx="7"/>
+<text class="tn" x="778" y="764" text-anchor="middle">Qdrant :6343</text>
+<text class="tr" x="778" y="780" text-anchor="middle">過渡備援·預定移除</text>
+
+<!-- 瀏覽器 -->
+<rect class="bx bx-main" x="998" y="128" width="180" height="64" rx="7"/>
+<text class="tn" x="1088" y="156" text-anchor="middle">React 管理操作</text>
+<text class="tr" x="1088" y="173" text-anchor="middle">登入·控制·門檻·手冊·班別</text>
+<rect class="bx bx-main" x="998" y="224" width="180" height="64" rx="7"/>
+<text class="tn" x="1088" y="252" text-anchor="middle">React 即時畫面</text>
+<text class="tr" x="1088" y="269" text-anchor="middle">告警橫幅·卡片·預警·OEE</text>
+
+<!-- 桌機 -->
+<rect class="bx bx-main" x="998" y="334" width="180" height="64" rx="7"/>
+<text class="tn" x="1088" y="362" text-anchor="middle">qwen3:14b</text>
+<text class="tr" x="1088" y="379" text-anchor="middle">輸出 JSON：原因＋處置</text>
+<rect class="bx bx-main" x="998" y="444" width="180" height="64" rx="7"/>
+<text class="tn" x="1088" y="472" text-anchor="middle">bge-m3</text>
+<text class="tr" x="1088" y="489" text-anchor="middle">文字 → 1024 維向量</text>
+<rect class="bx bx-note" x="998" y="530" width="180" height="44" rx="7"/>
+<text class="tn" x="1088" y="548" text-anchor="middle">Ollama :11434</text>
+<text class="tr" x="1088" y="564" text-anchor="middle">經 Tailscale 100.89.23.28</text>
+<rect class="bx bx-note" x="998" y="586" width="180" height="44" rx="7"/>
+<text class="tn" x="1088" y="604" text-anchor="middle">RTX 5060 Ti 16GB</text>
+<text class="tr" x="1088" y="620" text-anchor="middle">本地推論·資料不外傳</text>
+
+<!-- 主流程線 -->
+<!-- ① 讀值 -->
+<path class="ln ln-main" d="M202 248 L306 248" marker-end="url(#ah-main)"/>
+<text class="lab" x="262" y="240" text-anchor="middle">每秒讀值</text>
+<circle class="bd" cx="240" cy="248" r="9"/><text class="bd-t" x="240" y="252">1</text>
+<!-- ② 推論 -->
+<path class="ln ln-main" d="M450 248 L506 248" marker-end="url(#ah-main)"/>
+<circle class="bd" cx="478" cy="248" r="9"/><text class="bd-t" x="478" y="252">2</text>
+<text class="lab" x="478" y="236" text-anchor="middle">推論</text>
+<!-- ② 趨勢 -->
+<path class="ln ln-main" d="M450 276 L478 276 L478 476 L506 476" marker-end="url(#ah-main)"/>
+<text class="lab" x="486" y="428" text-anchor="start">10 秒平均</text>
+<!-- ③ 推送 -->
+<path class="ln ln-main" d="M650 248 L706 248" marker-end="url(#ah-main)"/>
+<text class="lab" x="678" y="236" text-anchor="middle">附結果</text>
+<path class="ln ln-main" d="M850 248 L998 248" marker-end="url(#ah-main)"/>
+<circle class="bd" cx="958" cy="248" r="9"/><text class="bd-t" x="958" y="252">3</text>
+<text class="lab" x="900" y="240" text-anchor="middle">WS 每秒</text>
+<!-- ③ 並行寫入 -->
+<path class="ln ln-main" d="M378 288 L378 534" marker-end="url(#ah-main)"/>
+<circle class="bd" cx="378" cy="320" r="9"/><text class="bd-t" x="378" y="324">3</text>
+<text class="lab" x="390" y="324" text-anchor="start">並行寫入</text>
+<text class="lab" x="390" y="420" text-anchor="start">create_task</text>
+<path class="ln ln-main" d="M378 598 L378 644" marker-end="url(#ah-main)"/>
+<text class="lab" x="390" y="625" text-anchor="start">每秒 5 訊號</text>
+<!-- ④ 事件成立 -->
+<path class="ln ln-main" d="M578 288 L578 334" marker-end="url(#ah-main)"/>
+<circle class="bd" cx="578" cy="311" r="9"/><text class="bd-t" x="578" y="315">4</text>
+<text class="lab" x="592" y="315" text-anchor="start">超標或異常</text>
+<path class="ln ln-main" d="M650 366 L706 366" marker-end="url(#ah-main)"/>
+<text class="lab" x="678" y="358" text-anchor="middle">診斷</text>
+<!-- ④ 檢索 -->
+<path class="ln ln-main" d="M760 398 L760 444" marker-end="url(#ah-main)"/>
+<circle class="bd" cx="760" cy="421" r="9"/><text class="bd-t" x="760" y="425">4</text>
+<path class="ln ln-main" d="M800 444 L800 398" marker-end="url(#ah-main)"/>
+<text class="lab" x="808" y="425" text-anchor="start">候選 12</text>
+<path class="ln ln-main" d="M850 466 L998 466" marker-end="url(#ah-main)"/>
+<text class="lab" x="900" y="460" text-anchor="middle">查詢文字</text>
+<path class="ln ln-main" d="M998 490 L850 490" marker-end="url(#ah-main)"/>
+<text class="lab" x="900" y="504" text-anchor="middle">向量</text>
+<path class="ln ln-main" d="M778 508 L778 644" marker-end="url(#ah-main)" marker-start="url(#ah-main)"/>
+<text class="lab" x="786" y="580" text-anchor="start">pgvector</text>
+<text class="lab" x="786" y="594" text-anchor="start">相似度檢索</text>
+<path class="ln ln-alt" d="M850 500 L880 500 L880 768 L850 768" marker-end="url(#ah-alt)"/>
+<text class="lab" x="886" y="700" text-anchor="start">雙寫</text>
+<!-- ⑤ LLM -->
+<path class="ln ln-main" d="M850 356 L998 356" marker-end="url(#ah-main)"/>
+<circle class="bd" cx="958" cy="356" r="9"/><text class="bd-t" x="958" y="360">5</text>
+<text class="lab" x="900" y="348" text-anchor="middle">prompt</text>
+<path class="ln ln-main" d="M998 382 L850 382" marker-end="url(#ah-main)"/>
+<text class="lab" x="900" y="396" text-anchor="middle">JSON</text>
+<path class="ln ln-main" d="M778 334 L778 288" marker-end="url(#ah-main)"/>
+<circle class="bd" cx="778" cy="311" r="9"/><text class="bd-t" x="778" y="315">5</text>
+<text class="lab" x="792" y="315" text-anchor="start">診斷＋依據</text>
+<!-- 一般連線 -->
+<path class="ln ln-gray" d="M850 160 L998 160" marker-end="url(#ah-gray)" marker-start="url(#ah-gray)"/>
+<text class="lab" x="924" y="154" text-anchor="middle">REST＋cookie</text>
+<path class="ln ln-gray" d="M330 186 L330 224" marker-end="url(#ah-gray)"/>
+<text class="lab" x="338" y="210" text-anchor="start">寫 PLC</text>
+<path class="ln ln-gray" d="M820 186 L820 224" marker-end="url(#ah-gray)"/>
+<text class="lab" x="828" y="210" text-anchor="start">註冊</text>
+<path class="ln ln-gray" d="M650 566 L690 566 L690 644" marker-end="url(#ah-gray)" marker-start="url(#ah-gray)"/>
+<text class="lab" x="696" y="625" text-anchor="start">tag_limits</text>
+<path class="ln ln-gray" d="M606 746 L606 728" marker-end="url(#ah-gray)"/>
+<path class="ln ln-gray" d="M406 728 L406 746" marker-end="url(#ah-gray)"/>
+<text class="lab" x="412" y="740" text-anchor="start">讀</text>
+
+<!-- 雲端 -->
+<rect class="bx bx-note" x="24" y="856" width="250" height="80" rx="7"/>
+<text class="tn" x="149" y="880" text-anchor="middle">雲端只是副本</text>
+<text class="tr" x="149" y="898" text-anchor="middle">原始每秒值不上雲 · 約 22 MB</text>
+<text class="tr" x="149" y="914" text-anchor="middle">現場判斷全在邊緣端</text>
+<text class="tr" x="149" y="930" text-anchor="middle">斷網照常運作，恢復後自動補送</text>
+<rect class="bx bx-cloud" x="306" y="856" width="300" height="88" rx="7"/>
+<text class="tn" x="456" y="880" text-anchor="middle">Tiger Cloud · db-iiot-scada</text>
+<text class="tr" x="456" y="898" text-anchor="middle">Free 服務 · TimescaleDB＋pgvector</text>
+<text class="tr" x="456" y="914" text-anchor="middle">6 個同步目標（雲端 SQL 001～006）</text>
+<text class="tr" x="456" y="930" text-anchor="middle">edge_writer 寫入 / mcp_reader 唯讀</text>
+<rect class="bx bx-cloud" x="680" y="856" width="260" height="88" rx="7"/>
+<text class="tn" x="810" y="880" text-anchor="middle">AWS Lambda · iot-scada-mcp</text>
+<text class="tr" x="810" y="898" text-anchor="middle">雲端 MCP · 6 個唯讀工具</text>
+<text class="tr" x="810" y="914" text-anchor="middle">Streamable HTTP 無狀態 · Function URL</text>
+<text class="tr" x="810" y="930" text-anchor="middle">Bearer 密碼，沒設一律 401</text>
+<rect class="bx bx-cloud" x="1004" y="856" width="172" height="88" rx="7"/>
+<text class="tn" x="1090" y="880" text-anchor="middle">claude.ai</text>
+<text class="tr" x="1090" y="898" text-anchor="middle">自訂連接器 iot-scada</text>
+<text class="tr" x="1090" y="914" text-anchor="middle">手機、外出也能問</text>
+<text class="tr" x="1090" y="930" text-anchor="middle">設備現在怎麼了</text>
+<rect class="bx bx-note" x="306" y="976" width="300" height="64" rx="7"/>
+<text class="tn" x="456" y="1000" text-anchor="middle">保留政策（雲端）</text>
+<text class="tr" x="456" y="1018" text-anchor="middle">10 秒彙整保留 30 天、7 天後壓縮</text>
+<rect class="bx bx-note" x="680" y="976" width="260" height="64" rx="7"/>
+<text class="tn" x="810" y="1000" text-anchor="middle">Secrets Manager · SAM</text>
+<text class="tr" x="810" y="1018" text-anchor="middle">iot-scada/mcp · Web Adapter 1.1.0</text>
+<rect class="bx bx-cloud" x="1004" y="976" width="172" height="64" rx="7"/>
+<text class="tn" x="1090" y="1000" text-anchor="middle">DeepInfra bge-m3</text>
+<text class="tr" x="1090" y="1018" text-anchor="middle">問題向量·百萬 tokens $0.01</text>
+
+<!-- ⑥ 同步上雲 -->
+<path class="ln ln-cloud" d="M406 790 L406 856" marker-end="url(#ah-cloud)"/>
+<circle class="bd-c" cx="406" cy="810" r="9"/><text class="bd-t" x="406" y="814">6</text>
+<text class="lab" x="420" y="814" text-anchor="start">每 60 秒 · 只送 10 秒彙整</text>
+<!-- ⑦ claude.ai → Lambda → Tiger -->
+<path class="ln ln-cloud" d="M1004 888 L940 888" marker-end="url(#ah-cloud)"/>
+<circle class="bd-c" cx="972" cy="888" r="9"/><text class="bd-t" x="972" y="892">7</text>
+<text class="lab" x="972" y="874" text-anchor="middle">/mcp</text>
+<path class="ln ln-cloud" d="M680 900 L606 900" marker-end="url(#ah-cloud)"/>
+<text class="lab" x="643" y="892" text-anchor="middle">唯讀查</text>
+<path class="ln ln-cloud" d="M940 924 L972 924 L972 1008 L1004 1008" marker-end="url(#ah-cloud)"/>
+<text class="lab" x="978" y="962" text-anchor="start">問題向量</text>
+<path class="ln ln-dash" d="M810 976 L810 944" marker-end="url(#ah-gray)"/>
+<text class="lab" x="818" y="962" text-anchor="start">設定值</text>
+
+<!-- 副流程 -->
+<rect class="scope scope-alt" x="12" y="1090" width="1176" height="470" rx="10"/>
+<text class="zt" x="24" y="1110">副流程（非即時路徑，以虛線表示）</text>
+
+<!-- 手冊上傳 -->
+<rect class="bx bx-lane" x="24" y="1124" width="164" height="52" rx="7"/>
+<text class="tn" x="106" y="1146" text-anchor="middle">手冊上傳</text>
+<text class="tr" x="106" y="1163" text-anchor="middle">RAG 入庫 · 需登入</text>
+<rect class="bx bx-lane" x="200" y="1124" width="160" height="52" rx="7"/>
+<text class="tn" x="280" y="1146" text-anchor="middle">RagPanel</text>
+<text class="tr" x="280" y="1163" text-anchor="middle">選設備＋PDF</text>
+<rect class="bx bx-lane" x="404" y="1124" width="160" height="52" rx="7"/>
+<text class="tn" x="484" y="1146" text-anchor="middle">rag/chunker.py</text>
+<text class="tr" x="484" y="1163" text-anchor="middle">依章節切·800 字·頁碼</text>
+<rect class="bx bx-lane" x="608" y="1124" width="160" height="52" rx="7"/>
+<text class="tn" x="688" y="1146" text-anchor="middle">bge-m3 嵌入</text>
+<text class="tr" x="688" y="1163" text-anchor="middle">每段 → 1024 維</text>
+<rect class="bx bx-lane" x="812" y="1124" width="160" height="52" rx="7"/>
+<text class="tn" x="892" y="1146" text-anchor="middle">pgvector＋Qdrant</text>
+<text class="tr" x="892" y="1163" text-anchor="middle">過渡期兩邊都寫</text>
+<rect class="bx bx-lane" x="1016" y="1124" width="160" height="52" rx="7"/>
+<text class="tn" x="1096" y="1146" text-anchor="middle">同步上雲</text>
+<text class="tr" x="1096" y="1163" text-anchor="middle">刪除→雲端標 deleted_at</text>
+<path class="ln ln-alt" d="M360 1150 L404 1150" marker-end="url(#ah-alt)"/><text class="lab" x="382" y="1144" text-anchor="middle">上傳</text>
+<path class="ln ln-alt" d="M564 1150 L608 1150" marker-end="url(#ah-alt)"/><text class="lab" x="586" y="1144" text-anchor="middle">段落</text>
+<path class="ln ln-alt" d="M768 1150 L812 1150" marker-end="url(#ah-alt)"/><text class="lab" x="790" y="1144" text-anchor="middle">向量</text>
+<path class="ln ln-alt" d="M972 1150 L1016 1150" marker-end="url(#ah-alt)"/><text class="lab" x="994" y="1144" text-anchor="middle">60 秒</text>
+
+<!-- 反向控制 -->
+<rect class="bx bx-lane" x="24" y="1196" width="164" height="52" rx="7"/>
+<text class="tn" x="106" y="1218" text-anchor="middle">反向控制</text>
+<text class="tr" x="106" y="1235" text-anchor="middle">寫入 PLC · 需登入</text>
+<rect class="bx bx-lane" x="200" y="1196" width="160" height="52" rx="7"/>
+<text class="tn" x="280" y="1218" text-anchor="middle">ControlPanel</text>
+<text class="tr" x="280" y="1235" text-anchor="middle">啟停·設定轉速</text>
+<rect class="bx bx-lane" x="404" y="1196" width="160" height="52" rx="7"/>
+<text class="tn" x="484" y="1218" text-anchor="middle">/api/control/write</text>
+<text class="tr" x="484" y="1235" text-anchor="middle">cookie＋X-SCADA-Request</text>
+<rect class="bx bx-lane" x="608" y="1196" width="160" height="52" rx="7"/>
+<text class="tn" x="688" y="1218" text-anchor="middle">WRITABLE 檢查</text>
+<text class="tr" x="688" y="1235" text-anchor="middle">兩個變數·轉速 0～1800</text>
+<rect class="bx bx-lane" x="812" y="1196" width="160" height="52" rx="7"/>
+<text class="tn" x="892" y="1218" text-anchor="middle">asyncua 寫入</text>
+<text class="tr" x="892" y="1235" text-anchor="middle">NS=3 · DB1 · 失敗回 502</text>
+<rect class="bx bx-lane" x="1016" y="1196" width="160" height="52" rx="7"/>
+<text class="tn" x="1096" y="1218" text-anchor="middle">audit_log</text>
+<text class="tr" x="1096" y="1235" text-anchor="middle">誰·IP·寫入前的值</text>
+<path class="ln ln-alt" d="M360 1222 L404 1222" marker-end="url(#ah-alt)"/><text class="lab" x="382" y="1216" text-anchor="middle">請求</text>
+<path class="ln ln-alt" d="M564 1222 L608 1222" marker-end="url(#ah-alt)"/><text class="lab" x="586" y="1216" text-anchor="middle">通過</text>
+<path class="ln ln-alt" d="M768 1222 L812 1222" marker-end="url(#ah-alt)"/><text class="lab" x="790" y="1216" text-anchor="middle">下發</text>
+<path class="ln ln-alt" d="M972 1222 L1016 1222" marker-end="url(#ah-alt)"/><text class="lab" x="994" y="1216" text-anchor="middle">記錄</text>
+
+<!-- 門檻設定 -->
+<rect class="bx bx-lane" x="24" y="1268" width="164" height="52" rx="7"/>
+<text class="tn" x="106" y="1290" text-anchor="middle">門檻設定</text>
+<text class="tr" x="106" y="1307" text-anchor="middle">migration 008 · 需登入</text>
+<rect class="bx bx-lane" x="200" y="1268" width="160" height="52" rx="7"/>
+<text class="tn" x="280" y="1290" text-anchor="middle">LimitsEditor</text>
+<text class="tr" x="280" y="1307" text-anchor="middle">正常範圍·警戒·危險</text>
+<rect class="bx bx-lane" x="404" y="1268" width="160" height="52" rx="7"/>
+<text class="tn" x="484" y="1290" text-anchor="middle">PUT …/limits/{tag}</text>
+<text class="tr" x="484" y="1307" text-anchor="middle">寫 tag_limits＋audit</text>
+<rect class="bx bx-lane" x="608" y="1268" width="160" height="52" rx="7"/>
+<text class="tn" x="688" y="1290" text-anchor="middle">core/limits.py</text>
+<text class="tr" x="688" y="1307" text-anchor="middle">改共用規格·版本指紋</text>
+<rect class="bx bx-lane" x="812" y="1268" width="160" height="52" rx="7"/>
+<text class="tn" x="892" y="1290" text-anchor="middle">全部同步生效</text>
+<text class="tr" x="892" y="1307" text-anchor="middle">告警·預警·診斷·前端</text>
+<rect class="bx bx-lane" x="1016" y="1268" width="160" height="52" rx="7"/>
+<text class="tn" x="1096" y="1290" text-anchor="middle">事件記當時門檻</text>
+<text class="tr" x="1096" y="1307" text-anchor="middle">migration 010</text>
+<path class="ln ln-alt" d="M360 1294 L404 1294" marker-end="url(#ah-alt)"/><text class="lab" x="382" y="1288" text-anchor="middle">儲存</text>
+<path class="ln ln-alt" d="M564 1294 L608 1294" marker-end="url(#ah-alt)"/><text class="lab" x="586" y="1288" text-anchor="middle">重載</text>
+<path class="ln ln-alt" d="M768 1294 L812 1294" marker-end="url(#ah-alt)"/><text class="lab" x="790" y="1288" text-anchor="middle">套用</text>
+<path class="ln ln-alt" d="M972 1294 L1016 1294" marker-end="url(#ah-alt)"/><text class="lab" x="994" y="1288" text-anchor="middle">快照</text>
+
+<!-- 趨勢預警成效 -->
+<rect class="bx bx-lane" x="24" y="1340" width="164" height="52" rx="7"/>
+<text class="tn" x="106" y="1362" text-anchor="middle">趨勢預警追蹤</text>
+<text class="tr" x="106" y="1379" text-anchor="middle">migration 007</text>
+<rect class="bx bx-lane" x="200" y="1340" width="160" height="52" rx="7"/>
+<text class="tn" x="280" y="1362" text-anchor="middle">四道防誤報</text>
+<text class="tr" x="280" y="1379" text-anchor="middle">5 分鐘·明顯·一致·夠大</text>
+<rect class="bx bx-lane" x="404" y="1340" width="160" height="52" rx="7"/>
+<text class="tn" x="484" y="1362" text-anchor="middle">延遲生效</text>
+<text class="tr" x="484" y="1379" text-anchor="middle">連 3 次亮·連 6 次熄</text>
+<rect class="bx bx-lane" x="608" y="1340" width="160" height="52" rx="7"/>
+<text class="tn" x="688" y="1362" text-anchor="middle">trend_warnings</text>
+<text class="tr" x="688" y="1379" text-anchor="middle">到了·自己退了·中途停機</text>
+<rect class="bx bx-lane" x="812" y="1340" width="160" height="52" rx="7"/>
+<text class="tn" x="892" y="1362" text-anchor="middle">連到事件</text>
+<text class="tr" x="892" y="1379" text-anchor="middle">事件紀錄顯示提前量</text>
+<rect class="bx bx-lane" x="1016" y="1340" width="160" height="52" rx="7"/>
+<text class="tn" x="1096" y="1362" text-anchor="middle">warning_stats.py</text>
+<text class="tr" x="1096" y="1379" text-anchor="middle">命中率·漏報率</text>
+<path class="ln ln-alt" d="M360 1366 L404 1366" marker-end="url(#ah-alt)"/><text class="lab" x="382" y="1360" text-anchor="middle">成立</text>
+<path class="ln ln-alt" d="M564 1366 L608 1366" marker-end="url(#ah-alt)"/><text class="lab" x="586" y="1360" text-anchor="middle">寫入</text>
+<path class="ln ln-alt" d="M768 1366 L812 1366" marker-end="url(#ah-alt)"/><text class="lab" x="790" y="1360" text-anchor="middle">到了</text>
+<path class="ln ln-alt" d="M972 1366 L1016 1366" marker-end="url(#ah-alt)"/><text class="lab" x="994" y="1360" text-anchor="middle">統計</text>
+
+<!-- 自動再訓練 -->
+<rect class="bx bx-lane" x="24" y="1412" width="164" height="52" rx="7"/>
+<text class="tn" x="106" y="1434" text-anchor="middle">自動再訓練</text>
+<text class="tr" x="106" y="1451" text-anchor="middle">背景任務 · 每小時</text>
+<rect class="bx bx-lane" x="200" y="1412" width="160" height="52" rx="7"/>
+<text class="tn" x="280" y="1434" text-anchor="middle">auto_trainer.py</text>
+<text class="tr" x="280" y="1451" text-anchor="middle">每小時檢查一次</text>
+<rect class="bx bx-lane" x="404" y="1412" width="160" height="52" rx="7"/>
+<text class="tn" x="484" y="1434" text-anchor="middle">條件判斷</text>
+<text class="tr" x="484" y="1451" text-anchor="middle">每訊號 ≥5000 筆·模型滿 1 天</text>
+<rect class="bx bx-lane" x="608" y="1412" width="160" height="52" rx="7"/>
+<text class="tn" x="688" y="1434" text-anchor="middle">取近 30 天</text>
+<text class="tr" x="688" y="1451" text-anchor="middle">只用實機 S7-1511T</text>
+<rect class="bx bx-lane" x="812" y="1412" width="160" height="52" rx="7"/>
+<text class="tn" x="892" y="1434" text-anchor="middle">IForest 訓練</text>
+<text class="tr" x="892" y="1451" text-anchor="middle">100 棵樹·門檻取 0.1%</text>
+<rect class="bx bx-lane" x="1016" y="1412" width="160" height="52" rx="7"/>
+<text class="tn" x="1096" y="1434" text-anchor="middle">reload_model()</text>
+<text class="tr" x="1096" y="1451" text-anchor="middle">熱更新·免重啟</text>
+<path class="ln ln-alt" d="M360 1438 L404 1438" marker-end="url(#ah-alt)"/><text class="lab" x="382" y="1432" text-anchor="middle">達標</text>
+<path class="ln ln-alt" d="M564 1438 L608 1438" marker-end="url(#ah-alt)"/><text class="lab" x="586" y="1432" text-anchor="middle">查詢</text>
+<path class="ln ln-alt" d="M768 1438 L812 1438" marker-end="url(#ah-alt)"/><text class="lab" x="790" y="1432" text-anchor="middle">訓練</text>
+<path class="ln ln-alt" d="M972 1438 L1016 1438" marker-end="url(#ah-alt)"/><text class="lab" x="994" y="1432" text-anchor="middle">載入</text>
+
+<!-- 保護機制 -->
+<rect class="bx bx-lane" x="24" y="1484" width="164" height="52" rx="7"/>
+<text class="tn" x="106" y="1506" text-anchor="middle">例外與保護機制</text>
+<text class="tr" x="106" y="1523" text-anchor="middle">降級·限流·防誤判</text>
+<rect class="bx bx-note" x="200" y="1484" width="160" height="52" rx="7"/>
+<text class="tn" x="280" y="1506" text-anchor="middle">RunGate 恢復期</text>
+<text class="tr" x="280" y="1523" text-anchor="middle">停機後 30～120 秒不判斷</text>
+<rect class="bx bx-note" x="404" y="1484" width="160" height="52" rx="7"/>
+<text class="tn" x="484" y="1506" text-anchor="middle">冷卻 60 秒</text>
+<text class="tr" x="484" y="1523" text-anchor="middle">同一事件不重複呼叫 LLM</text>
+<rect class="bx bx-note" x="608" y="1484" width="160" height="52" rx="7"/>
+<text class="tn" x="688" y="1506" text-anchor="middle">LLM 60 秒逾時</text>
+<text class="tr" x="688" y="1523" text-anchor="middle">失敗不擋整個流程</text>
+<rect class="bx bx-note" x="812" y="1484" width="160" height="52" rx="7"/>
+<text class="tn" x="892" y="1506" text-anchor="middle">章節由程式選</text>
+<text class="tr" x="892" y="1523" text-anchor="middle">模型不能編造依據</text>
+<rect class="bx bx-note" x="1016" y="1484" width="160" height="52" rx="7"/>
+<text class="tn" x="1096" y="1506" text-anchor="middle">同步不漏不重複</text>
+<text class="tr" x="1096" y="1523" text-anchor="middle">確認後才推 watermark</text>
+
+<!-- 橫向支撐 -->
+<text class="zt" x="12" y="1586">橫向支撐（貫穿各層，不在主流程上）</text>
+<rect class="bx bx-support" x="12" y="1598" width="184" height="64" rx="7"/>
+<text class="tn" x="104" y="1626" text-anchor="middle">Tailscale VPN</text>
+<text class="tr" x="104" y="1643" text-anchor="middle">筆電↔桌機 Ollama 通道</text>
+<rect class="bx bx-support" x="210.4" y="1598" width="184" height="64" rx="7"/>
+<text class="tn" x="302.4" y="1626" text-anchor="middle">Docker Compose</text>
+<text class="tr" x="302.4" y="1643" text-anchor="middle">backend·frontend 容器化</text>
+<rect class="bx bx-support" x="408.8" y="1598" width="184" height="64" rx="7"/>
+<text class="tn" x="500.8" y="1626" text-anchor="middle">Migration＋rollback</text>
+<text class="tr" x="500.8" y="1643" text-anchor="middle">本機 001～010·雲端 001～006</text>
+<rect class="bx bx-support" x="607.2" y="1598" width="184" height="64" rx="7"/>
+<text class="tn" x="699.2" y="1626" text-anchor="middle">登入·audit_log</text>
+<text class="tr" x="699.2" y="1643" text-anchor="middle">寫入操作留紀錄</text>
+<rect class="bx bx-support" x="805.6" y="1598" width="184" height="64" rx="7"/>
+<text class="tn" x="897.6" y="1626" text-anchor="middle">pytest</text>
+<text class="tr" x="897.6" y="1643" text-anchor="middle">155 passed·51 需資料庫</text>
+<rect class="bx bx-support" x="1004" y="1598" width="184" height="64" rx="7"/>
+<text class="tn" x="1096" y="1626" text-anchor="middle">.env 集中密碼</text>
+<text class="tr" x="1096" y="1643" text-anchor="middle">容器不帶管理員帳密</text>
+</svg>
+</div>
+<p class="hint">← 圖寬 1200px，請在圖內左右滑動 →</p>
+
+<div class="cards">
+
+<section class="card">
+<h2>主流程逐步說明<span class="tag">①→⑦</span></h2>
+<ol>
+<li><span class="n">1</span><b>讀值</b>：<code>plc_simulator.py</code> 每秒透過 OPC UA 讀 5 個製程訊號與 4 個生產訊號，先依門檻判定每個訊號是正常、偏高、警戒還是危險。</li>
+<li><span class="n">2</span><b>判斷</b>：RunGate 確認機台在穩定運轉後，Isolation Forest 用 30 筆視窗算 25 個特徵打分數，連續 5 秒低於門檻才算異常；同時把讀值湊成 10 秒平均交給 <code>trend.py</code> 估「幾分鐘後到線」。</li>
+<li><span class="n">3</span><b>並行扇出</b>：用 <code>asyncio.create_task</code> 同時推到畫面（WebSocket）、寫入量測與機台狀態、寫入預警紀錄，互不等待。</li>
+<li><span class="n">4</span><b>事件與檢索</b>：任何訊號到警戒以上、或 ML 判定異常，就開一個事件（正常 60 秒內再發生算同一件），記下當時門檻。<code>ollama_analyzer.py</code> 組查詢文字，bge-m3 轉向量，從 pgvector 撈 12 個候選段落，再由程式依章節條件挑出依據。</li>
+<li><span class="n">5</span><b>診斷</b>：章節＋讀值＋5 分鐘趨勢交給 qwen3:14b，只輸出 JSON（原因、處置），系統自己附上「手冊 § 章節・頁碼」，寫進事件並推到畫面。</li>
+<li><span class="n c">6</span><b>同步上雲</b>：<code>cloud_sync.py</code> 每 60 秒把 10 秒彙整、事件、OEE、預警、手冊、設定 6 類資料 upsert 到 Tiger Cloud。</li>
+<li><span class="n c">7</span><b>雲端查詢</b>：claude.ai 呼叫 Lambda 上的 MCP server，用唯讀帳號查 Tiger Cloud；查手冊時問題向量改用 DeepInfra 的 bge-m3。</li>
+</ol>
+<p>「數據上畫面」走 ①→②→③；「異常變診斷」走 ②→④→⑤；「在外面查得到」走 ③→⑥→⑦。</p>
+</section>
+
+<section class="card full">
+<h2>容易搞混的選擇<span class="tag">對照</span></h2>
+<div class="tw"><table>
+<tr><th>A</th><th>B</th><th>差別</th></tr>
+<tr><td>規格告警</td><td>ML 異常</td><td>規格告警看單一訊號有沒有超過門檻；Isolation Forest 看 5 個訊號的組合像不像平常，抓得到「每個都沒超標但組合不對」。</td></tr>
+<tr><td>告警</td><td>趨勢預警</td><td>告警是「已經超過」；預警是「照這個速度，再過幾分鐘會超過」。</td></tr>
+<tr><td>命中率</td><td>漏報率</td><td>命中率看發出的預警準不準（有沒有亂報）；漏報率看真的超標時有沒有事先提醒（有沒有漏掉），只算預警功能上線後的事件。</td></tr>
+<tr><td>pgvector</td><td>Qdrant</td><td>手冊向量已搬進 TimescaleDB 的 pgvector（可一起同步上雲）；Qdrant 只剩過渡期備援，預定移除。</td></tr>
+<tr><td>本機 MCP</td><td>雲端 MCP</td><td>同一份 <code>mcp_tools/</code>：本機用 stdio 接 TimescaleDB；雲端在 Lambda 用 HTTP 接 Tiger Cloud。</td></tr>
+<tr><td>Ollama bge-m3</td><td>DeepInfra bge-m3</td><td>同一個模型，實測相似度 ≥ 0.9999；本機算手冊向量，雲端只算問題向量。</td></tr>
+<tr><td>edge_writer</td><td>mcp_reader</td><td>雲端兩個帳號：同步用的可寫，MCP 用的只能讀。</td></tr>
+<tr><td>S7-1511T</td><td>-SIM / -MOCK</td><td>實機、PLCSIM、後端內建模擬分開存；-MOCK 不上雲，只有實機資料拿來自動再訓練。</td></tr>
+<tr><td>compose.yml</td><td>compose.full.yml</td><td>前者使用現有 TimescaleDB 容器；後者連資料庫一起建立。</td></tr>
+</table></div>
+</section>
+
+<section class="card">
+<h2>每一層的重點<span class="tag">分層</span></h2>
+<ul>
+<li><b>OT 現場層</b>：S7-1511T 走 OPC UA（NS=3，PLC_1 → DataBlocksGlobal → DB1）。PLCSIM 上跑 <code>FB_MachineSim</code>（一階延遲、故障 1～5、漸進劣化）與 <code>FB_Production</code>，用 <code>plcsim_ctl.py</code> 重現各種情境。</li>
+<li><b>後端</b>：FastAPI + asyncio，以每秒一次的讀值迴圈為中心往外扇出；routers 管 REST 與登入，ws_manager 管 WebSocket。</li>
+<li><b>儲存</b>：一個 TimescaleDB 同時放時序資料（hypertable、continuous aggregate）、事件、設定與手冊向量（pgvector HNSW）。</li>
+<li><b>AI</b>：Isolation Forest 在後端推論；qwen3:14b 與 bge-m3 在桌機 Ollama，經 Tailscale 連線，資料不出自己的網路。</li>
+<li><b>前端</b>：React + Vite。即時畫面吃 WebSocket；管理操作走 REST，寫入類都要登入。</li>
+<li><b>雲端</b>：Tiger Cloud 存副本；Lambda 跑雲端 MCP；Secrets Manager 放連線字串與密碼；SAM 管部署。</li>
+</ul>
+</section>
+
+<section class="card full">
+<h2>重點技術與設計亮點<span class="tag">價值</span></h2>
+<ul>
+<li><b>對應 acatech 成熟度 L4／L5</b>：L4 透明化（為什麼發生：依手冊診斷原因）、L5 可預測（接下來會怎樣：趨勢預警），並用數據證明預警是準的。</li>
+<li><b>預警可量化</b>：乾淨測試（溫度每分鐘 +1.5°C）命中率 100%、漏報率 0%、平均提前 7 分 40 秒，預估誤差約 10 秒。</li>
+<li><b>診斷可追溯</b>：章節由程式依訊號條件挑選，模型只寫兩句話；每筆診斷附手冊章節與頁碼，事件記下當時門檻。</li>
+<li><b>邊緣優先</b>：告警、預警、診斷全在現場完成，斷網照常運作；雲端只收 10 秒彙整，用量約 22 MB。</li>
+<li><b>同步不漏不重複</b>：watermark 確認後才前進、主鍵 upsert、每輪往回重疊、advisory lock 避免多程序衝突。</li>
+<li><b>一份工具兩種部署</b>：MCP 工具本機與雲端共用，雲端走 Lambda 無狀態模式，成本接近 0。</li>
+<li><b>OT 狀態影響 IT 判斷</b>：停機、換模、剛開機的變動不當成異常，進行中的預警記為中途停機、不算命中率。</li>
+</ul>
+</section>
+
+<section class="card full">
+<h2>參數速查<span class="tag">數值</span></h2>
+<div class="tw"><table>
+<tr><th>項目</th><th>設定</th><th>位置</th></tr>
+<tr><td>輪詢週期</td><td>1 秒；兩次讀值隔超過 5 秒當成重新開機</td><td>core/plc_simulator.py、core/production.py</td></tr>
+<tr><td>製程訊號</td><td>motor_speed、temperature、pressure、vibration、current（位號 ST-101、TT-102、PT-103、VT-104、CT-105）</td><td>core/device_profile.py</td></tr>
+<tr><td>溫度門檻（預設）</td><td>正常 65～75°C、警戒 85、危險 100；可在網頁修改</td><td>tag_limits（migration 008）</td></tr>
+<tr><td>Isolation Forest</td><td>30 筆視窗 × 5 統計量 × 5 訊號＝25 特徵；100 棵樹、contamination 0.02；門檻取訓練分數最低 0.1%；連續 5 秒才算異常</td><td>ml/</td></tr>
+<tr><td>目前模型</td><td><code>S7-1511T-SIM_anomaly_20261111_153838.pkl</code>，門檻 -0.0545</td><td>backend/models</td></tr>
+<tr><td>自動再訓練</td><td>每小時檢查；每訊號 ≥ 5000 筆且模型滿 1 天；只用近 30 天 <code>S7-1511T</code> 實機資料</td><td>ml/auto_trainer.py</td></tr>
+<tr><td>恢復期</td><td>RECOVERY_MIN_SECONDS 30、RECOVERY_MAX_SECONDS 120</td><td>.env → compose</td></tr>
+<tr><td>事件合併</td><td>正常超過 60 秒再異常才算新事件；結束前 60 秒內門檻被改會標記 limits_changed</td><td>core/incidents.py</td></tr>
+<tr><td>趨勢預警</td><td>視窗 10 分鐘、至少 5 分鐘、預估 60 分鐘內才發；連 3 次亮、連 6 次熄</td><td>core/trend.py、TREND_* 變數</td></tr>
+<tr><td>手冊切段</td><td>依章節編號切，單段最多 800 字、重疊 100；附章節名與頁碼；修正康熙部首字元</td><td>rag/chunker.py</td></tr>
+<tr><td>檢索</td><td>bge-m3 1024 維、cosine、HNSW；先撈 12 段再依章節條件排序</td><td>rag/、ml/ollama_analyzer.py</td></tr>
+<tr><td>LLM</td><td>qwen3:14b，temperature 0.3、num_predict 200、逾時 60 秒、同一事件冷卻 60 秒；輸出 JSON</td><td>ml/ollama_analyzer.py</td></tr>
+<tr><td>反向控制</td><td>motor_enable（0/1）、motor_speed_setpoint（0～1800 RPM）</td><td>routers/control.py</td></tr>
+<tr><td>本機保留</td><td>每秒原始值與 10 秒彙整 90 天；oee_hourly 2 年</td><td>TimescaleDB</td></tr>
+<tr><td>雲端同步</td><td>每 60 秒；量測往回重疊 15 分鐘、事件 2 分鐘、OEE 2 小時</td><td>sync/cloud_sync.py</td></tr>
+<tr><td>雲端保留</td><td>measurements_10s 30 天、7 天後壓縮</td><td>雲端 006</td></tr>
+<tr><td>雲端 MCP</td><td>Lambda 512 MB、逾時 60 秒、x86_64 容器映像；查詢範圍最多 7 天；log 14 天</td><td>mcp_cloud/template.yaml</td></tr>
+</table></div>
+</section>
+
+<section class="card full">
+<h2>核心程式碼<span class="tag">示意</span></h2>
+<p>以下是依專案邏輯整理的簡化版，用來看懂結構；細節（變數名、參數）以實際檔案為準。</p>
+<details open><summary>每秒主迴圈：判定、推論、預估、扇出（core/plc_simulator.py · _process_reading）</summary><pre><code>levels = {tag: evaluate(spec, values[tag]) for tag, spec in profile["tags"].items()}
+gate = run_gate.update(is_running(machine_state, motor_enable), not out_of_range, now)
+anomaly = detector.predict(values) if gate["status"] == "active" else detector.paused_result(gate)
+_handle_trend_events(trend.update(device_id, values, profile["tags"], now, gate["status"] == "active"))
+
+if worst in ("warning", "danger") or anomaly["is_anomaly"]:
+    _incident = _incident or new_incident(device_id, at, limits.version)   # 記下當時門檻
+    absorb(_incident, values, severity, worst, anomaly.get("score"), at)
+    if now - _last_ollama_call &gt;= OLLAMA_COOLDOWN:                       # 同一事件 60 秒一次
+        asyncio.create_task(_fetch_ollama_analysis(values, device_id, _incident, severity))
+
+await manager.broadcast(data)                         # 路 A：推到畫面
+asyncio.create_task(write_to_db(device_id, values, at))   # 路 B：寫量測
+asyncio.create_task(write_status(device_id, at, ...))     # 路 C：機台狀態（OEE 用）</code></pre></details>
+<details open><summary>趨勢預估：多久會到線（core/trend.py）</summary><pre><code>slope = theil_sen(t, v)                      # 每兩點算斜率取中位數，突波拉不歪
+if slope * window_seconds &lt; 3 * noise:       # 斜率要明顯大於雜訊（MAD 估計）
+    return STABLE
+if kendall_tau(minute_means(v)) &lt; 0.6:       # 每分鐘平均要一路往上
+    return STABLE
+eta = (limit - current) / slope              # 目前值用最近 30 秒平均推到現在
+# 趨緩時改用一階延遲估終點；到不了門檻就不預警</code></pre></details>
+<details open><summary>由程式選依據章節（ml/ollama_analyzer.py · select_primary）</summary><pre><code>for c in ranked:                             # 已依「符合 +1、矛盾 −2」排序
+    if c["parsed"] and c["contra"] == 0 and c["match"] &gt;= 1:
+        return c, "full"                     # 條件完全符合
+for c in ranked:
+    if c["parsed"] and c["match"] &gt;= 1:
+        return c, "partial"                  # 部分符合 → 模型要寫「推論：」
+for c in ranked:
+    if not c["parsed"]:
+        return c, "reference"                # 只是參考章節
+return None, None</code></pre></details>
+<details open><summary>漏報率只算上線後（core/warning_stats.py · miss_summary）</summary><pre><code>since = await conn.fetchval("SELECT min(started_at) FROM trend_warnings")   # 第一筆預警
+counted = [i for i in incidents if i["started_at"] &gt;= since]
+missed = [i for i in counted if i["id"] not in warned_ids]   # 沒有 reached 預警連過去
+miss_rate = len(missed) / len(counted) if counted else None</code></pre></details>
+<details open><summary>反向控制白名單（routers/control.py）</summary><pre><code>WRITABLE = {
+    "motor_enable":         ("motor_enable",   VariantType.Boolean, (0, 1)),
+    "motor_speed_setpoint": ("speed_setpoint", VariantType.Float,   (0, 1800)),
+}
+# Pydantic 驗證 tag 必須在白名單、值在安全範圍；還要登入 cookie 與 X-SCADA-Request header</code></pre></details>
+</section>
+
+<section class="card full">
+<h2>安全性檢視<span class="tag">現況</span></h2>
+<div class="tw"><table>
+<tr><th>等級</th><th>項目</th><th>現況</th></tr>
+<tr><td><span class="sev ok">已處理</span></td><td>資料庫密碼明文</td><td>密碼只放 <code>.env</code>；compose 沒設密碼直接報錯；容器只傳必要變數，不帶管理員帳密</td></tr>
+<tr><td><span class="sev ok">已處理</span></td><td>API 無認證</td><td>寫入 PLC、門檻、手冊、班別等都要登入（HttpOnly cookie＋session）並帶 <code>X-SCADA-Request</code>；每次操作寫 <code>audit_log</code></td></tr>
+<tr><td><span class="sev ok">已處理</span></td><td>雲端存取</td><td>MCP 沒設密碼一律 401；雲端帳號分可寫與唯讀；密碼放 Secrets Manager</td></tr>
+<tr><td><span class="sev ok">已處理</span></td><td>前端寫死後端位址、CORS</td><td>改用 <code>VITE_API_BASE</code> 與 <code>CORS_ORIGINS</code> 環境變數</td></tr>
+<tr><td><span class="sev md">中</span></td><td>OPC UA 安全模式 None＋匿名</td><td>內網 demo 可接受；接實機改 Sign &amp; Encrypt＋憑證＋帳密</td></tr>
+<tr><td><span class="sev md">中</span></td><td>5435 port 對區網與 Tailscale 開放</td><td>規劃網路時改成只綁本機，或用 Tailscale ACL 限制來源</td></tr>
+<tr><td><span class="sev md">中</span></td><td>Ollama 綁 0.0.0.0</td><td>綁定 Tailscale 介面或加防火牆規則</td></tr>
+<tr><td><span class="sev md">中</span></td><td>手冊文字進 prompt</td><td>章節由程式挑、模型只輸出固定 JSON；雲端 MCP 說明手冊內容是資料不是指令；仍建議只收可信來源</td></tr>
+<tr><td><span class="sev lo">低</span></td><td>上傳沒有大小限制</td><td>需登入才能上傳；可再限制檔案大小與類型</td></tr>
+<tr><td><span class="sev lo">低</span></td><td><code>/docs</code> 公開</td><td>正式環境關閉或加驗證</td></tr>
+</table></div>
+</section>
+
+<section class="card full">
+<h2>已知限制與後續<span class="tag">誠實清單</span></h2>
+<ul>
+<li>趨勢預警需要 5 分鐘資料，一兩分鐘內急升來不及預警（事件 40 就是這種）；下一步加入變化率告警（ISA-18.2 rate-of-change）。</li>
+<li>門檻被改造成的超標目前會算成漏報（事件 39）；告警處理會加上標示並另附扣除版本。</li>
+<li>驗證資料來自 PLCSIM，尚未在實機長期運轉。</li>
+<li>pypdf 只抽文字，掃描檔與圖片要先 OCR。</li>
+<li>「知道了」只記在網頁內；確認、擱置、處理紀錄、主動通知還沒做。</li>
+<li>Qdrant 預定 11/19 後移除；acatech 第 6 階段（自適應、自動降載）未實作。</li>
+</ul>
+</section>
+
+</div>
+<p class="foot">字型使用 Google Fonts 的 Noto Sans TC，離線時會自動改用系統中文字型。</p>
+</div>
+</body>
+</html>

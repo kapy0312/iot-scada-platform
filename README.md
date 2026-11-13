@@ -2,6 +2,8 @@
 
 > 從 PLC 到 AI 的端對端工業監控平台：Siemens S7-1511T × OPC UA × TimescaleDB × LLM 診斷 × 雲端 MCP
 
+[![CI](https://github.com/kapy0312/iot-scada-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/kapy0312/iot-scada-platform/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 ![Platform](https://img.shields.io/badge/Platform-IIoT%20%7C%20SCADA-00c8b4?style=flat-square)
 ![Backend](https://img.shields.io/badge/Backend-FastAPI%20%2B%20asyncio-009688?style=flat-square)
 ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20TypeScript-3178c6?style=flat-square)
@@ -16,6 +18,16 @@
 - **知道為什麼**：異常事件由本地 LLM 依設備手冊診斷，附章節與頁碼
 - **事先知道**：趨勢預警在超標前 5～10 分鐘提醒，並用命中率與漏報率檢驗自己準不準
 - **在任何地方問得到**：資料同步上雲，claude.ai 透過雲端 MCP 直接查設備狀況
+
+## 畫面
+
+**溫度劣化測試：系統在超標前就發出預警，事件紀錄顯示「提前 5 分 29 秒」**
+
+![趨勢預警：溫度過警戒後預估約 6 分鐘到危險值](docs/images/trend-warning.png)
+
+**溫度過 100°C：危險告警橫幅、卡片標示，事件附 AI 診斷與手冊章節頁碼**
+
+![危險告警與 AI 診斷](docs/images/danger-alarm.png)
 
 ---
 
@@ -94,6 +106,8 @@ flowchart LR
     LB --> DI
     SM -.-> LB
 ```
+
+完整版架構圖（含副流程、參數速查、安全性檢視）：[docs/architecture.html](docs/architecture.html)（下載後用瀏覽器開啟），或看 [靜態圖](docs/images/architecture.png)。
 
 **資料怎麼流**：PLC 每秒讀值 → 後端同時做告警、ML 判斷、趨勢預估、OEE 狀態記錄 → 寫進本機 TimescaleDB → TimescaleDB 自動彙整成 10 秒一筆 → 每 60 秒把彙整後的資料、事件、OEE、預警紀錄、手冊與設定同步到 Tiger Cloud → Lambda 上的 MCP server 只用唯讀帳號查雲端，給 claude.ai 使用。
 
@@ -461,4 +475,4 @@ device_id 規則：`S7-1511T`＝實機、`S7-1511T-SIM`＝PLCSIM、`S7-1511T-MOC
 
 ## License
 
-MIT
+[MIT](LICENSE)
