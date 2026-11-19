@@ -13,9 +13,10 @@ services:
       RAG_BACKEND: ${RAG_BACKEND:-qdrant}
       OLLAMA_URL: http://100.89.23.28:11434
       PLC_SOURCE: opcua
-      PLC_URL: opc.tcp://192.168.0.10:4840
-      # 接 PLCSIM 時用 -SIM，模擬資料不會進入訓練集；之後接實機要改回 S7-1511T
-      OPCUA_DEVICE_ID: S7-1511T-SIM
+      # PLC 位址與寫入資料用的 device_id：在 .env 切換 PLCSIM／實機，不用改這個檔案
+      # 接 PLCSIM 用 -SIM（模擬資料不會進入自動再訓練）；接實機改成 S7-1511T
+      PLC_URL: ${PLC_URL:-opc.tcp://192.168.0.10:4840}
+      OPCUA_DEVICE_ID: ${OPCUA_DEVICE_ID:-S7-1511T-SIM}
       # 允許呼叫 API 的前端網址（逗號分隔）；用 Tailscale IP 開前端時要加上那個網址
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
       SESSION_HOURS: ${SESSION_HOURS:-12}
