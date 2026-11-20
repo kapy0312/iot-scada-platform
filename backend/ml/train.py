@@ -12,6 +12,10 @@
 停機與剛恢復運轉的資料一律不用（跟即時偵測的暫停規則相同，見 core/production.RunGate）：
 依 machine_status 判斷；那段時間沒有 machine_status 紀錄（005 之前的舊資料）也不用。
 整個區間都沒有 machine_status 時退回舊做法（全部使用）並提醒。
+運轉中但有任何訊號超出設備規格的正常範圍（偏高、偏低）的秒數也不用：
+劣化測試（drift）時溫度一路偏高、還沒到警戒值開事件的那幾分鐘，不能當成正常資料學進去。
+滑動視窗特徵只在「時間連續」的資料段內計算：被排除的時段會把資料切成好幾段，
+視窗不能跨過中間的空白（否則前後兩段的數值會被當成連續的 30 秒）。
 
 訓練完會存到 models/，後端可呼叫 POST /api/system/reload-model 立即換用，不必重啟。
 """
@@ -34,6 +38,7 @@ from ml.model_store import save_model
 MIN_SAMPLES = 600          # 至少 10 分鐘的有效特徵列（建議 60 分鐘以上，誤報較少）
 THRESHOLD_QUANTILE = 0.001 # 門檻＝訓練資料中最低的 0.1% 分數；正常資料幾乎不會低於它
 EXCLUDE_MARGIN = timedelta(minutes=2)
+MAX_GAP_S = 2.0            # 相鄰兩筆隔超過這麼多秒，就當成不同的資料段（每秒讀值偶爾會跨到下一秒，差 2 秒仍算連續）
 
 
 async def load_wide(device_id: str, since: datetime, tags: list[str]) -> pd.DataFrame:
@@ -124,8 +129,26 @@ def running_mask(df: pd.DataFrame, status: pd.DataFrame, device_id: str, tags: l
         state = None if np.isnan(states[i]) else int(states[i])
         enable = None if np.isnan(enables[i]) else int(enables[i])
         running = has_status and is_running(state, enable)
-        keep[i] = gate.update(running, bool(all_normal[i]), times[i])["status"] == "active"
+        active = gate.update(running, bool(all_normal[i]), times[i])["status"] == "active"
+        keep[i] = active and bool(all_normal[i])   # 穩定運轉、而且每個訊號都在正常範圍內，才拿來訓練
     return pd.Series(keep, index=df.index)
+
+
+def build_segment_features(df: pd.DataFrame, tags: list[str], window: int = WINDOW,
+                           max_gap_s: float = MAX_GAP_S) -> pd.DataFrame:
+    """
+    df：已過濾的寬表格（時間為 index）。依時間空白切成連續的資料段，各段分別算滑動視窗特徵再合併
+    比 window 短的資料段湊不滿一個視窗，不會產生任何特徵
+    """
+    if df.empty:
+        return build_training_features(df.reset_index(drop=True), tags, window)
+    gaps = df.index.to_series().diff().dt.total_seconds()
+    segment = (gaps.isna() | (gaps > max_gap_s)).cumsum()
+    parts = [build_training_features(part.reset_index(drop=True), tags, window)
+             for _, part in df.groupby(segment.to_numpy()) if len(part) >= window]
+    if not parts:
+        return build_training_features(df.iloc[:0].reset_index(drop=True), tags, window)
+    return pd.concat(parts, ignore_index=True)
 
 
 def fit(X: pd.DataFrame) -> Pipeline:
@@ -163,9 +186,9 @@ async def train(device_id: str, since: datetime, keep_anomalies: bool = False) -
     elif not df.empty:
         before = len(df)
         df = df[running_mask(df, status, device_id, tags)]
-        print(f"[Train] 排除停機、恢復期與沒有狀態紀錄的時段：{before} → {len(df)} 筆")
+        print(f"[Train] 排除停機、恢復期、沒有狀態紀錄、訊號超出正常範圍的秒數：{before} → {len(df)} 筆")
 
-    X = build_training_features(df.reset_index(drop=True), tags, WINDOW)
+    X = build_segment_features(df, tags, WINDOW)
     if len(X) < MIN_SAMPLES:
         print(f"[Train] ❌ 有效樣本 {len(X)} 筆，至少需要 {MIN_SAMPLES} 筆（約 10 分鐘的正常運轉資料）")
         return None

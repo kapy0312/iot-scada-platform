@@ -20,7 +20,7 @@ from core.device_profile import get_production, get_tags
 from core.production import (
     CHANGEOVER, FAULT, IDLE, PLANNED_STOP, RUN, CounterTracker, RunGate, is_running,
 )
-from ml.train import running_mask
+from ml.train import build_segment_features, running_mask
 
 DEV = "S7-1511T-SIM"
 NORMAL = {"motor_speed": 1480, "temperature": 70, "pressure": 5.0, "vibration": 1.2, "current": 24}
@@ -224,6 +224,38 @@ def test_舊版PLC只有motor_enable也能過濾():
     df = _wide([NORMAL] * 3)
     status = pd.DataFrame({"state": [None, None, None], "motor_enable": [True, False, None]}, index=df.index)
     assert running_mask(df, status, DEV, get_tags(DEV)).tolist() == [True, False, False]
+
+
+def test_運轉中訊號偏高的秒數不拿來訓練():
+    # 劣化測試：運轉中溫度偏高（78°C，超出正常 65～75，還沒到警戒 85）→ 那幾秒不用
+    rows = [NORMAL] * 5 + [{**NORMAL, "temperature": 78}] * 3 + [NORMAL] * 5
+    df = _wide(rows)
+    status = pd.DataFrame({"state": [RUN] * 13, "motor_enable": [True] * 13}, index=df.index)
+    keep = running_mask(df, status, DEV, get_tags(DEV)).tolist()
+    assert keep == [True] * 5 + [False] * 3 + [True] * 5
+
+
+def test_特徵視窗不跨過被排除的空白():
+    # 40 秒連續 → 空白 10 秒 → 40 秒連續：每段各湊得出 40 − 29 = 11 個視窗，總共 22 個
+    t0 = datetime(2026, 11, 11, tzinfo=timezone.utc)
+    idx = [t0 + timedelta(seconds=i) for i in range(40)] + [t0 + timedelta(seconds=50 + i) for i in range(40)]
+    df = pd.DataFrame([NORMAL] * 80, index=idx)
+    assert len(build_segment_features(df, get_tags(DEV))) == 22
+
+
+def test_特徵允許跨秒的小間隔():
+    # 每秒讀值偶爾跨到下一秒（間隔 2 秒）仍算同一段：40 筆 → 11 個視窗
+    t0 = datetime(2026, 11, 11, tzinfo=timezone.utc)
+    idx = [t0 + timedelta(seconds=i + (1 if i >= 20 else 0)) for i in range(40)]
+    df = pd.DataFrame([NORMAL] * 40, index=idx)
+    assert len(build_segment_features(df, get_tags(DEV))) == 11
+
+
+def test_太短的資料段不產生特徵():
+    t0 = datetime(2026, 11, 11, tzinfo=timezone.utc)
+    df = pd.DataFrame([NORMAL] * 20, index=[t0 + timedelta(seconds=i) for i in range(20)])
+    X = build_segment_features(df, get_tags(DEV))
+    assert len(X) == 0 and X.shape[1] == 25
 
 
 # ---------- 每秒處理流程（不碰資料庫、不碰 Ollama） ----------
