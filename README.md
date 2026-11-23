@@ -12,6 +12,12 @@
 ![AI](https://img.shields.io/badge/AI-Ollama%20qwen3%3A14b%20%7C%20MCP-ff6b35?style=flat-square)
 ![PLC](https://img.shields.io/badge/PLC-Siemens%20S7--1511T-0078d4?style=flat-square)
 
+![Demo：PLCSIM 溫度劣化 → 趨勢預警 → 警戒告警與 AI 診斷 → claude.ai 透過雲端 MCP 查事件](docs/images/demo.gif)
+
+<sub>畫面已加速。PLCSIM 讓溫度每分鐘升 1.5°C：先出現趨勢預警，過 85°C 觸發警戒，最後在 claude.ai 透過雲端 MCP 查事件、AI 診斷與手冊依據。</sub>
+
+▶ **完整 Demo 影片（YouTube）**：https://www.youtube.com/watch?v=DcHqKwXjdPI
+
 一台馬達驅動系統（轉速、溫度、壓力、振動、電流 5 個製程訊號＋機台狀態與產量），從 PLC 每秒讀值開始，一路做到：
 
 - **看得到**：即時監控、規格告警、OEE
