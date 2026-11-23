@@ -16,7 +16,7 @@
 
 - **看得到**：即時監控、規格告警、OEE
 - **知道為什麼**：異常事件由本地 LLM 依設備手冊診斷，附章節與頁碼
-- **事先知道**：趨勢預警在超標前 5～10 分鐘提醒，並用命中率與漏報率檢驗自己準不準
+- **事先知道**：趨勢預警在超標前提醒（乾淨測試提前 5～10 分鐘），並用命中率與漏報率檢驗自己準不準
 - **在任何地方問得到**：資料同步上雲，claude.ai 透過雲端 MCP 直接查設備狀況
 
 ## 畫面
@@ -60,7 +60,7 @@
 | 2 連結 Connectivity | — | OPC UA 直連 PLC，不經第三方 Gateway；Tailscale 串接桌機 GPU |
 | 3 可視化 Visibility | 發生了什麼？ | 即時監控頁、規格告警、TimescaleDB 歷史資料、OEE |
 | **4 透明化 Transparency** | **為什麼發生？** | **Isolation Forest 偵測多訊號組合異常 → LLM 依手冊章節診斷原因與處置，記下當時門檻** |
-| **5 可預測 Predictive capacity** | **接下來會發生什麼？** | **趨勢預警估「再過幾分鐘會到警戒／危險值」，命中率 100%、平均提前 7 分 40 秒（見下方實測）** |
+| **5 可預測 Predictive capacity** | **接下來會發生什麼？** | **趨勢預警估「再過幾分鐘會到警戒／危險值」；乾淨測試命中 2/2、平均提前 7 分 40 秒，累積數據也一併公開（見下方實測）** |
 | 6 自適應 Adaptability | 系統能自己應對嗎？ | 尚未實作（目前只寫入轉速設定、啟停，沒有自動降載） |
 
 第 4、5 階段是這個專案的重點：不只顯示數字，還要說出原因，並且在問題發生前就提醒，再用數據證明提醒是準的。
@@ -107,7 +107,7 @@ flowchart LR
     SM -.-> LB
 ```
 
-完整版架構圖（含副流程、參數速查、安全性檢視）：[docs/architecture.html](docs/architecture.html)（下載後用瀏覽器開啟），或看 [靜態圖](docs/images/architecture.png)。
+完整版架構圖（含副流程、參數速查、安全性檢視）：[docs/architecture.html](docs/architecture.html)（下載後用瀏覽器開啟）。
 
 **資料怎麼流**：PLC 每秒讀值 → 後端同時做告警、ML 判斷、趨勢預估、OEE 狀態記錄 → 寫進本機 TimescaleDB → TimescaleDB 自動彙整成 10 秒一筆 → 每 60 秒把彙整後的資料、事件、OEE、預警紀錄、手冊與設定同步到 Tiger Cloud → Lambda 上的 MCP server 只用唯讀帳號查雲端，給 claude.ai 使用。
 
@@ -128,6 +128,9 @@ flowchart LR
 - **事件合併**：正常超過 60 秒再異常才算新事件，同一次故障不會被拆成很多筆
 - **恢復期**：停機、換模、剛開機、斷線重連後，先等數值穩定（30～120 秒）才判斷，避免把升溫過程當成異常
 - **手冊診斷**：程式依異常訊號挑出手冊章節（pgvector 向量搜尋），再交給 Ollama qwen3:14b 寫原因與處置；章節由程式決定、不讓模型自己編，每筆診斷附「測試版1 §3.1・p.2」這類依據
+- **診斷時機**：規格告警（過警戒或危險值），或 ML 判定異常且有訊號超出正常範圍；只有 ML 異常、所有訊號都正常時只記錄不診斷。同一次事件 60 秒最多診斷一次，最多等 60 秒
+- **訓練資料**：只用穩定運轉、而且每個訊號都在正常範圍內的秒數；資料中間有空白（相鄰兩筆隔超過 2 秒）就分段，各段分別算 30 秒特徵視窗，不會把空白前後接成連續資料
+- **自動再訓練**：每小時檢查一次，只用實機（`S7-1511T`）資料，最近 30 天每個訊號都有 5000 筆以上、且模型不是今天訓練的，就重訓並熱更新，不用重啟
 - **記下當時門檻**：事件開始時記下 5 個訊號的門檻；之後就算門檻改了，回頭看舊事件仍用當時的標準判斷，並標註「當時門檻 69（現行 85）」
 
 ### 趨勢預警
@@ -141,7 +144,9 @@ flowchart LR
 
 ### 安全性
 - 密碼只放 `.env`；容器不載入管理員帳密（只傳必要變數）
-- 寫入 PLC、改門檻、上傳手冊等操作都要登入，並帶 `X-SCADA-Request` header 防跨站請求；每次操作記到 `audit_log`（誰、IP、修改前後的值）
+- 寫入 PLC、改門檻、上傳手冊、切換資料源等操作都要登入，並帶 `X-SCADA-Request` header 防跨站請求；每次操作記到 `audit_log`（誰、IP、修改前後的值）
+- 密碼用 argon2 雜湊；登入 token 放 HttpOnly + SameSite=Strict cookie，資料庫只存 token 的 SHA-256 雜湊；同一帳號與 IP 5 分鐘內失敗 5 次就暫時鎖定
+- 寫入 PLC 只開放白名單：啟停（`motor_enable`）與轉速設定（0～1800 RPM）
 - 雲端 MCP 沒設密碼時一律回 401；雲端資料庫分成同步用（edge_writer）與查詢用（mcp_reader，唯讀）兩個帳號
 
 ---
@@ -227,13 +232,13 @@ OEE    = 可用率 × 表現率 × 良率
 | `oee_hourly` | 每小時 OEE 原始數據 |
 | `trend_warnings` | 趨勢預警與結果 |
 | `manual_documents` | 手冊與段落向量（本機刪除 → 雲端標記刪除） |
-| `settings` | 門檻、品號標準週期、班別 |
+| `tag_limits`、`product_specs`、`shift_definitions` | 門檻、品號標準週期、班別 |
 
 - **不漏**：同步指標（watermark）只在雲端確認收到後才往前推；斷線、雲端暫停、backend 重開都從原處補送
 - **不重複**：以主鍵 upsert，重送只會覆蓋
-- **晚到資料**：每輪往回多送 15 分鐘
+- **晚到資料**：每輪往回重疊一段重送（10 秒彙整 15 分鐘、事件與預警 2 分鐘、OEE 2 小時）
 - **同時只有一個同步程序**：用 PostgreSQL advisory lock
-- **不同步**：`-MOCK` 設備（後端內建亂數模擬）
+- **不同步**：`-MOCK` 設備（後端內建亂數模擬）；`-SIM`（PLCSIM）會同步，雲端 MCP 查得到測試結果
 
 ### Phase 2：手冊向量搬到 pgvector
 
@@ -253,7 +258,7 @@ OEE    = 可用率 × 表現率 × 良率
 
 ```powershell
 cd backend
-python mcp_cloud/smoke_test.py <Function URL>/mcp     # 雲端冒煙測試
+python mcp_cloud/smoke_test.py <Function URL>/mcp     # 雲端冒煙測試（密碼讀環境變數 MCP_AUTH_TOKEN，不寫在指令裡）
 python tools/test_mcp_tools.py S7-1511T-SIM 24         # 本機 6 個工具
 ```
 
@@ -274,6 +279,7 @@ python tools/test_mcp_tools.py S7-1511T-SIM 24         # 本機 6 個工具
 | 雲端 | Tiger Cloud、AWS Lambda、SAM、Secrets Manager、DeepInfra | 雲端 MCP 每月成本接近 0 |
 | AI 介面 | Model Context Protocol（MCP） | 本機 stdio＋雲端 Streamable HTTP |
 | 部署 | Docker Compose | backend、frontend 兩個容器 |
+| CI | GitHub Actions | push、PR 時跑後端 pytest（Python 3.11）與前端 build（Node 22） |
 
 ---
 
@@ -309,6 +315,8 @@ iot-scada-platform/
 │   ├── components/              # ProcessOverview、AlarmBanner、AlarmPanel、EventLog、TrendLog、OeeCard…
 │   └── hooks/                   # useWebSocket、useAlarms、useAlarmAttention…
 ├── plc/                         # FB_MachineSim.scl、FB_Production.scl、DB1 變數
+├── docs/                        # 完整架構圖、README 截圖
+├── .github/workflows/ci.yml     # GitHub Actions CI
 ├── docker-compose.yml           # 使用現有 TimescaleDB 容器
 └── docker-compose.full.yml      # 全新部署（含 TimescaleDB）
 ```
@@ -372,7 +380,7 @@ docker compose up -d --build
 
 ```powershell
 cd backend
-python -m pytest tests -q            # 沒有測試資料庫時，需要資料庫的測試會自動略過
+python -m pytest tests -q            # 預期 159 passed、51 skipped（需要資料庫的測試在沒設 TEST_* 時自動略過）
 python -m tools.sync_admin status    # 雲端同步狀態
 python -m tools.cloud_admin check    # 雲端兩個帳號的權限
 ```
@@ -413,17 +421,27 @@ device_id 規則：`S7-1511T`＝實機、`S7-1511T-SIM`＝PLCSIM、`S7-1511T-MOC
 |---|---|---|
 | `WS` | `/ws/realtime` | 每秒推送讀值、告警、ML 分數、趨勢預估、機台狀態 |
 | `GET` | `/api/history` | 歷史資料 |
+| `GET` | `/api/anomaly-events` | 逐秒的異常紀錄 |
 | `GET` | `/api/incidents` | 事件紀錄（含 AI 診斷、當時門檻、事前預警） |
 | `GET` | `/api/trend/current` | 各訊號目前的預警狀態 |
 | `GET` | `/api/trend/warnings` | 預警紀錄、命中率、漏報率 |
 | `GET` | `/api/oee/current`、`/shifts`、`/timeline` | OEE 即時值、班別報表、停機時間軸 |
-| `GET` / `PUT` | `/api/oee/config`、`/products`、`/shifts` | 品號標準週期、班別設定 🔒 |
+| `GET` | `/api/oee/config` | 品號標準週期、班別設定 |
+| `PUT` | `/api/oee/products`、`/api/oee/shifts` | 修改品號標準週期、班別 🔒 |
 | `GET` | `/api/device-profile/{device_id}` | 設備規格與目前門檻 |
 | `PUT` / `DELETE` | `/api/device-profile/{device_id}/limits/{tag}` | 修改門檻／恢復預設 🔒 |
 | `POST` | `/api/control/write` | 寫入 motor_enable、motor_speed_setpoint 🔒 |
-| `POST` / `GET` / `DELETE` | `/api/rag/upload`、`/documents` | 手冊上傳、列表、刪除 🔒 |
+| `POST` | `/api/rag/upload` | 上傳手冊 🔒 |
+| `GET` | `/api/rag/documents` | 手冊列表 |
+| `PATCH` / `DELETE` | `/api/rag/documents/{file_hash}` | 啟用／停用、刪除手冊 🔒 |
+| `GET` / `POST` | `/api/system/data-source` | 查詢／切換資料源（OPC UA、內建模擬）；切換需登入 🔒 |
+| `GET` | `/api/system/model-info` | 目前載入的 ML 模型 |
+| `POST` | `/api/system/reload-model` | 重新載入最新模型 🔒 |
+| `POST` | `/api/system/simulate-anomaly`、`/simulate-drift` | 內建模擬的突發異常、漸進劣化（只限內建模擬） 🔒 |
 | `GET` | `/api/system/sync-status` | 雲端同步狀態 |
 | `POST` | `/api/auth/login`、`/logout` | 登入、登出 |
+| `GET` | `/api/auth/me` | 目前登入的帳號 |
+| `GET` | `/health` | 健康檢查 |
 
 🔒 需要登入 cookie 與 `X-SCADA-Request: 1` header。
 
@@ -441,7 +459,7 @@ device_id 規則：`S7-1511T`＝實機、`S7-1511T-SIM`＝PLCSIM、`S7-1511T-MOC
 早期讓模型自己引用手冊章節，結果會挑錯或編出不存在的章節。改成由程式依異常訊號選章節，模型只負責寫原因與處置，每筆診斷都能追溯到手冊頁碼。
 
 ### 4. 邊緣與雲端的資料一致性
-同步要做到斷線不漏、重送不重複、晚到資料能補、多個程序不衝突：watermark 只在雲端確認後前進、主鍵 upsert、每輪往回重疊 15 分鐘、advisory lock。雲端帳號分成可寫與唯讀，手冊與設定表只開放必要的刪除權限。
+同步要做到斷線不漏、重送不重複、晚到資料能補、多個程序不衝突：watermark 只在雲端確認後前進、主鍵 upsert、每輪往回重疊一段重送、advisory lock。雲端帳號分成可寫與唯讀，手冊與設定表只開放必要的刪除權限。
 
 ### 5. 換向量服務不用重算
 雲端 Lambda 連不到桌機 Ollama，問題向量改用 DeepInfra。先實測兩邊同一個模型（bge-m3）算出的向量幾乎相同（相似度 ≥ 0.9999、56 題依據章節一致），才決定沿用本機算好的手冊向量。
@@ -449,14 +467,21 @@ device_id 規則：`S7-1511T`＝實機、`S7-1511T-SIM`＝PLCSIM、`S7-1511T-MOC
 ### 6. OT 狀態影響 IT 判斷
 停機、換模、剛開機時數值本來就會變動。用 RunGate 控制什麼時候該判斷：這些時段 ML 不判斷、趨勢預警清空視窗並把進行中的預警記為「中途停機」，不算進命中率。
 
+### 7. 訓練資料不能混進「快壞了」的資料
+劣化測試時，溫度偏高但還沒到警戒值的那幾分鐘，原本會被當成正常資料學進模型。改成運轉中任何訊號超出正常範圍的秒數都不用；排除後資料中間會出現空白，所以再依時間切段、各段分別算特徵視窗，不讓視窗跨過空白。合併的是算好的特徵，Isolation Forest 每筆獨立判斷，不會產生拼接縫。
+
 ---
 
 ## 已知限制與下一步
 
 **已知限制**
 - 趨勢預警需要 5 分鐘資料，一兩分鐘內急升的狀況來不及預警（由變化率告警補）
+- 非常慢的劣化（例如每分鐘 0.3°C）會被「漲幅至少要正常範圍一半」擋掉，只能等規格告警（可加 CUSUM 偵測慢速漂移）
 - 驗證資料來自 PLCSIM 模擬，尚未在實機長期運轉
-- 班別不分星期
+- 資安尚未達上線標準：OPC UA 目前是 Security None、匿名登入；讀取 API 與 WebSocket 不需登入；沒有 HTTPS；登入失敗鎖定只記在記憶體，backend 重開會歸零
+- 告警「知道了」只記在瀏覽器，尚未有 ISA-18.2 的告警生命週期
+- 自動再訓練在主迴圈內執行，訓練期間每秒讀值會延遲；載入模型時不分 device_id
+- 班別不分星期；migration 沒有版本表，依編號手動執行
 
 **下一步**
 1. 移除 Qdrant，手冊向量完全使用 pgvector
@@ -464,12 +489,14 @@ device_id 規則：`S7-1511T`＝實機、`S7-1511T-SIM`＝PLCSIM、`S7-1511T-MOC
 3. 變化率告警（ISA-18.2 rate-of-change），補趨勢預警抓不到的急升
 4. 門檻變更造成的超標加上標示，漏報率另附扣除版本
 5. 網頁顯示雲端同步狀態與漏報率
+6. 上線前資安：OPC UA Sign & Encrypt＋憑證、HTTPS、讀取 API 加登入、資料庫 port 不對區網開放
+7. 自動再訓練改到背景執行緒（`asyncio.to_thread`），模型依 device_id 載入
 
 ---
 
 ## 履歷技能關鍵字
 
-`IIoT` `SCADA` `OPC UA` `Siemens S7-1500` `TIA Portal` `PLCSIM` `SCL` `FastAPI` `asyncio` `WebSocket` `React` `TypeScript` `TimescaleDB` `PostgreSQL` `pgvector` `RAG` `Isolation Forest` `Predictive Maintenance` `OEE` `ISA-18.2` `Ollama` `LLM` `MCP` `AWS Lambda` `AWS SAM` `Secrets Manager` `Tiger Cloud` `Docker` `Tailscale` `acatech Industrie 4.0 Maturity Index`
+`IIoT` `SCADA` `OPC UA` `Siemens S7-1500` `TIA Portal` `PLCSIM` `SCL` `FastAPI` `asyncio` `WebSocket` `React` `TypeScript` `TimescaleDB` `PostgreSQL` `pgvector` `RAG` `Isolation Forest` `Predictive Maintenance` `OEE` `ISA-101` `Ollama` `LLM` `MCP` `AWS Lambda` `AWS SAM` `Secrets Manager` `Tiger Cloud` `Docker` `GitHub Actions` `Tailscale` `acatech Industrie 4.0 Maturity Index`
 
 ---
 
