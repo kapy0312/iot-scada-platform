@@ -307,18 +307,20 @@ async def sync_incidents_once(local, cloud, batch: int = INC_BATCH, cols: list[s
     upper = await local.fetchval("SELECT now() - $1::interval", INC_SETTLE)
     if upper <= wm:
         return 0, False
+    # 不設上限：進行中的事件每秒都會更新 updated_at，設上限的話它永遠不會被選到
     rows = await local.fetch(f"""
         SELECT {", ".join(cols)} FROM anomaly_incidents
-        WHERE updated_at >= $1 AND updated_at < $2 AND NOT (device_id LIKE ANY($3::text[]))
+        WHERE updated_at >= $1 AND NOT (device_id LIKE ANY($2::text[]))
         ORDER BY updated_at, id
-        LIMIT $4
-    """, wm - OVERLAP[T_INC], upper, exclude_patterns(), batch)
+        LIMIT $3
+    """, wm - OVERLAP[T_INC], exclude_patterns(), batch)
     records = [tuple(r) for r in rows]
     if records:
         await upsert_incidents(cloud, records, cols)
     more = len(records) == batch
+    # 指標最多推到 upper（5 秒前），比它新的列下一輪會再送一次（upsert 不會重複），晚 commit 的交易也不會被跳過
     # 一批送滿：指標只推到這批最後一筆（下一輪往回 2 分鐘再接）；沒送滿：已經追到 upper
-    new_wm = max(wm, records[-1][cols.index("updated_at")]) if more else upper
+    new_wm = min(upper, max(wm, records[-1][cols.index("updated_at")])) if more else upper
     await set_watermark(local, T_INC, new_wm, len(records))
     return len(records), more
 
@@ -329,17 +331,18 @@ async def sync_trend_once(local, cloud, batch: int = INC_BATCH) -> tuple[int, bo
     upper = await local.fetchval("SELECT now() - $1::interval", INC_SETTLE)
     if upper <= wm:
         return 0, False
+    # 跟事件表一樣不設上限：進行中的預警會持續更新，也要送得上去
     rows = await local.fetch(f"""
         SELECT {", ".join(TREND_COLS)} FROM trend_warnings
-        WHERE updated_at >= $1 AND updated_at < $2 AND NOT (device_id LIKE ANY($3::text[]))
+        WHERE updated_at >= $1 AND NOT (device_id LIKE ANY($2::text[]))
         ORDER BY updated_at, id
-        LIMIT $4
-    """, wm - OVERLAP[T_TREND], upper, exclude_patterns(), batch)
+        LIMIT $3
+    """, wm - OVERLAP[T_TREND], exclude_patterns(), batch)
     records = [tuple(r) for r in rows]
     if records:
         await upsert_trend(cloud, records)
     more = len(records) == batch
-    new_wm = max(wm, records[-1][TREND_COLS.index("updated_at")]) if more else upper
+    new_wm = min(upper, max(wm, records[-1][TREND_COLS.index("updated_at")])) if more else upper
     await set_watermark(local, T_TREND, new_wm, len(records))
     return len(records), more
 

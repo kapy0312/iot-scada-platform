@@ -296,6 +296,29 @@ def test_事件表_新增與更新都會同步_舊版本不會蓋掉新版本():
 
 
 @needs_db
+def test_進行中的事件每秒都在更新_也會同步上雲():
+    """事件還在進行時，後端每個異常秒都會把 updated_at 改成 now()；
+    以前只送「5 秒前更新的列」，進行中的事件永遠不會被選到，要等事件結束才上雲"""
+    async def body(env):
+        await env.refreshed_until(None)
+        inc_id = await env.local.fetchval("""
+            INSERT INTO anomaly_incidents (device_id, started_at, ended_at, level, severity, peak, updated_at)
+            VALUES ('S7-1511T-SIM', now() - interval '10 minutes', now(), 'danger', 3, '{}', now())
+            RETURNING id""")
+        await cs.sync_cycle(env.local, env.cloud)
+        assert await env.cloud.fetchval("SELECT level FROM anomaly_incidents WHERE id = $1", inc_id) == "danger"
+
+        # 下一秒又更新（模擬每秒寫入），下一輪會帶上新版本
+        await env.local.execute("UPDATE anomaly_incidents SET records = 99, updated_at = now() WHERE id = $1", inc_id)
+        await cs.sync_cycle(env.local, env.cloud)
+        assert await env.cloud.fetchval("SELECT records FROM anomaly_incidents WHERE id = $1", inc_id) == 99
+
+        # 指標仍只推到「5 秒前」，晚 commit 的交易不會被跳過
+        assert await env.wm(cs.T_INC) <= await env.local.fetchval("SELECT now()") - cs.INC_SETTLE
+    run(body)
+
+
+@needs_db
 def test_另一個backend正在同步時這一輪略過():
     async def body(env):
         await env.add_buckets("S7-1511T-SIM", T0, 6)
